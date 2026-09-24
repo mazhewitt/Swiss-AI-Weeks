@@ -8,6 +8,10 @@ and no label-derived encoding enters a feature.
 
 Per Client, each Merchant Family's score is its best candidate's score, `none` is one minus the
 best score overall, and the row is normalised to sum to 1. A Client without candidates is `none`.
+
+Pseudo-Labelled Clients (see `pseudo_examples`) can join the fit as extra candidate rows under a
+sample weight. They only ever add training rows: every Client the model is asked to score, and so
+every out-of-fold row and the decision layer fitted on them, stays a real-labelled one.
 """
 
 from __future__ import annotations
@@ -53,6 +57,9 @@ LGBM_PARAMS = {
     "verbose": -1,
 }
 
+# the sample weight of a Pseudo-Labelled Client's candidate rows; a real-labelled one's weigh 1
+PSEUDO_WEIGHT = 0.5
+
 _DAY = pd.Timedelta(days=1)
 
 
@@ -96,6 +103,25 @@ def candidates(streams: pd.DataFrame, cutoff: pd.Timestamp = CUTOFF) -> pd.DataF
     for column in CLIENT_CONTEXT:
         out[column] = context[column].to_numpy(dtype=float)
     return out[["client_id", *FEATURE_COLUMNS]]
+
+
+def pseudo_examples(streams: pd.DataFrame, labels: pd.Series, cutoff: pd.Timestamp) -> pd.DataFrame:
+    """Training rows of Pseudo-Labelled Clients at one Shifted Cutoff: their Candidate Streams, from a
+    stream table detected at `cutoff` (so on the transactions before it only), each with `target` 1
+    when its family is the Client's Pseudo-Label. Clients without candidates add no rows."""
+    streams = streams[streams["client_id"].astype(str).isin(set(labels.index.astype(str)))]
+    rows = candidates(streams, cutoff)
+    rows["target"] = _targets(rows, labels)
+    return rows
+
+
+def _targets(rows: pd.DataFrame, labels: pd.Series) -> np.ndarray:
+    """1 where the candidate's family is its Client's label, else 0."""
+    truth = labels.astype(str)
+    truth.index = truth.index.astype(str)
+    return (
+        rows["family"].astype(str).to_numpy(dtype=object) == truth.reindex(rows["client_id"]).to_numpy(dtype=object)
+    ).astype(int)
 
 
 def client_proba(scored: pd.DataFrame, clients: pd.Index) -> pd.DataFrame:
@@ -183,25 +209,35 @@ class RankerModel:
 
     name = "ranker"
 
-    def __init__(self, booster: lgb.Booster | None = None, constant: float | None = None):
+    def __init__(
+        self,
+        booster: lgb.Booster | None = None,
+        constant: float | None = None,
+        pseudo: pd.DataFrame | None = None,
+        pseudo_weight: float = PSEUDO_WEIGHT,
+    ):
         self.booster = booster
         self.constant = constant  # the score of every candidate when training had one outcome only
+        # Pseudo-Labelled training rows (`pseudo_examples`), pooled into every fit; never saved
+        self.pseudo = pseudo
+        self.pseudo_weight = pseudo_weight
 
     def fit(self, transactions: pd.DataFrame, labels: pd.Series) -> "RankerModel":
         unknown = set(labels) - set(LABELS)
         if unknown:
             raise ValueError(f"labels outside the allowed set: {sorted(unknown)}")
         rows = candidates(_streams_of(transactions, labels.index))
-        target = (
-            rows["family"].astype(str).to_numpy(dtype=object)
-            == labels.astype(str).reindex(rows["client_id"]).to_numpy(dtype=object)
-        ).astype(int)
+        x, target, weight = rows[FEATURE_COLUMNS], _targets(rows, labels), None
+        if self.pseudo is not None and len(self.pseudo):
+            x = pd.concat([x, self.pseudo[FEATURE_COLUMNS]], ignore_index=True)
+            target = np.concatenate([target, self.pseudo["target"].to_numpy(dtype=int)])
+            weight = np.concatenate([np.ones(len(rows)), np.full(len(self.pseudo), float(self.pseudo_weight))])
         self.booster, self.constant = None, None
         if len(set(target)) < 2:
-            self.constant = float(target.mean()) if len(target) else 0.0
+            self.constant = float(np.average(target, weights=weight)) if len(target) else 0.0
             return self
         model = lgb.LGBMClassifier(**LGBM_PARAMS)
-        model.fit(rows[FEATURE_COLUMNS], target)
+        model.fit(x, target, sample_weight=weight)
         self.booster = model.booster_
         return self
 
