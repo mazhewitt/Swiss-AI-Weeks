@@ -7,6 +7,10 @@ stream qualifies, predict `none`.
 
 Train macro-F1 with max_last_n=4: 0.5331.
 
+Superseded by the CLI, which reproduces the committed submission exactly:
+    uv run rf train --model rules --none-gate
+    uv run rf submit --model rules --name milestone2_rules_none_gate_v2
+
 Usage (from the repo root):
     PYTHONPATH=src uv run python scripts/milestone2_rule.py score
     PYTHONPATH=src uv run python scripts/milestone2_rule.py write submissions/milestone2_rules_none_gate_v2.csv
