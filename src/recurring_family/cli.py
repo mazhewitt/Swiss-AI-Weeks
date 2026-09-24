@@ -1,4 +1,4 @@
-"""The one CLI: fetch-data, split, train, cv, evaluate, submit."""
+"""The one CLI: fetch-data, split, streams, train, cv, evaluate, submit."""
 
 import argparse
 import json
@@ -11,11 +11,12 @@ from pathlib import Path
 import pandas as pd
 
 from . import data
-from .config import LABEL_COLUMN, LABELS
+from .config import LABEL_COLUMN, LABELS, MERCHANT_FAMILIES
 from .cross_validation import CV_FOLDS, out_of_fold_proba
 from .evaluation import append_log, log_row, paired_bootstrap, previous_best, score
 from .fetch import fetch_data
 from .models import MODELS, predict_labels
+from .streams import cached_streams
 from .submission import InvalidSubmission, read_submission, validate, write_submission
 
 DEFAULT_ZIP = Path("hackathons") / "2026" / "data" / "dataset.zip"
@@ -30,6 +31,10 @@ class Paths:
         self.log = root / "experiments" / "log.csv"
         # committed next to the log, so every logged run can be compared against in any clone
         self.runs = root / "experiments" / "runs"
+
+    @property
+    def streams(self) -> Path:
+        return self.artifacts / "streams"
 
     def model(self, name: str) -> Path:
         return self.artifacts / f"{name}.json"
@@ -72,6 +77,23 @@ def cmd_split(args, paths: Paths) -> int:
         f"split: valid -> {counts.get('selection', 0)} selection, {counts.get('holdout', 0)} sealed holdout "
         f"Clients -> {paths.valid_split}"
     )
+    return 0
+
+
+def cmd_streams(args, paths: Paths) -> int:
+    table, cached = cached_streams(paths.raw, args.split, paths.streams)
+    n_clients = data.load_transactions(paths.raw, args.split)["client_id"].nunique()
+    source = "cached" if cached else "detected"
+    print(
+        f"streams: {args.split} ({n_clients} Clients, {len(table)} Recurring Streams, "
+        f"{int(table['active'].sum())} Active) [{source}]"
+    )
+    for family in MERCHANT_FAMILIES:
+        fam = table[table["family"] == family]
+        print(
+            f"  {family:<10} streams {len(fam)}  active {int(fam['active'].sum())}  "
+            f"clients {fam['client_id'].nunique()}"
+        )
     return 0
 
 
@@ -216,6 +238,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("split", parents=[common], help="write the valid selection / sealed-holdout split")
     p.set_defaults(func=cmd_split)
+
+    p = sub.add_parser("streams", parents=[common], help="detect (or load cached) Recurring Streams and summarise per family")
+    p.add_argument("--split", choices=data.SPLITS, default="train")
+    p.set_defaults(func=cmd_streams)
 
     p = sub.add_parser("train", parents=[common], help="fit a model on the train Clients")
     p.add_argument("--model", choices=sorted(MODELS), required=True)

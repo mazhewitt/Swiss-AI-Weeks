@@ -19,7 +19,7 @@ LABEL_SOURCES = (*LABELLED_SPLITS, *VALID_SETS)
 HOLDOUT_FRACTION = 0.3
 SPLIT_SEED = 20260101
 
-_TRANSACTION_FILES = {
+TRANSACTION_FILES = {
     "train": "train_transactions.jsonl",
     "valid": "valid_transactions.jsonl",
     "test": "test_transactions.jsonl",
@@ -119,7 +119,7 @@ def load_transactions(raw_dir: Path, split: str) -> pd.DataFrame:
     """One row per transaction, `timestamp` as tz-aware UTC, `mcc` as a string."""
     _check_split(split, SPLITS)
     df = pd.read_json(
-        Path(raw_dir) / _TRANSACTION_FILES[split],
+        Path(raw_dir) / TRANSACTION_FILES[split],
         lines=True,
         dtype={"mcc": str},
         convert_dates=False,
