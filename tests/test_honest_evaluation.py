@@ -119,6 +119,21 @@ def test_training_run_that_reads_valid_labels_fails_loudly(fetched, leaky, capsy
     assert not (fetched.root / "artifacts" / "leaky.json").exists()
 
 
+@pytest.mark.parametrize("command", ["train", "cv"])
+@pytest.mark.parametrize("peek", ["holdout", "valid"])
+def test_refit_with_selection_still_refuses_holdout_and_full_valid_labels(fetched, leaky, capsys, command, peek):
+    # The refit loosens the policy to allow selection labels; holdout must stay sealed.
+    big_train(fetched)
+    big_valid(fetched)
+    leaky.peek = peek
+    extra = ["--out", str(fetched.root / "oof.csv")] if command == "cv" else []
+    assert fetched.run(command, "--model", "leaky", "--with-selection", *extra) != 0
+    err = capsys.readouterr().err
+    assert "valid labels" in err and "training" in err
+    assert not (fetched.root / "artifacts" / "leaky.json").exists()
+    assert not (fetched.root / "oof.csv").exists()
+
+
 def test_training_run_without_valid_reads_succeeds(fetched, leaky):
     leaky.peek = "train"
     assert fetched.run("train", "--model", "leaky") == 0
@@ -157,7 +172,12 @@ def test_checkpoint_mode_scores_the_holdout_and_logs_its_own_row_type(fetched, c
     set_train_majority(fetched, "none")
     assert fetched.run("train", "--model", "prior") == 0
     assert fetched.run("evaluate", "--model", "prior") == 0
-    assert fetched.run("evaluate", "--model", "prior", "--checkpoint", "--change", "m1 checkpoint") == 0
+    out = fetched.root / "checkpoint_proba.csv"
+    assert fetched.run(
+        "evaluate", "--model", "prior", "--checkpoint", "--change", "m1 checkpoint", "--proba", str(out)
+    ) == 0
+    # exactly the sealed-holdout Clients were scored, not the selection set or all of valid
+    assert pd.read_csv(out, dtype=str)["client_id"].tolist() == holdout.tolist()
 
     rows = read_rows(fetched.log)
     assert [r["row_type"] for r in rows] == ["evaluate", "checkpoint"]
@@ -223,6 +243,20 @@ def test_deltas_under_the_tie_margin_are_ties_even_when_consistent(fetched):
     assert float(cloud["macro_f1"]) == 0.0
     assert float(gym["delta"]) == pytest.approx((0.2 / 1.1) / 8, abs=1e-4)
     assert gym["verdict"] == "tie"
+
+
+def test_large_delta_whose_paired_interval_crosses_zero_is_a_tie(fetched, capsys):
+    labels = big_valid(fetched, n_none=10, n_gym=4, n_cloud=0)
+    selection = read_split(fetched, capsys).query("set == 'selection'")["client_id"]
+    assert sorted(labels[c] for c in selection) == ["gym"] * 3 + ["none"] * 7
+    # all-none vs all-gym on 10 Clients: delta = (2*0.7/1.7 - 2*0.3/1.3)/8 ~ 0.045 >= the
+    # tie margin, but resampling 10 Clients often flips the none share below 0.5.
+    gym = evaluate_with_majority(fetched, "gym", "all gym")
+    none = evaluate_with_majority(fetched, "none", "all none")
+    assert float(none["delta"]) == pytest.approx((1.4 / 1.7 - 0.6 / 1.3) / 8, abs=1e-4)
+    assert float(none["delta"]) >= 0.03
+    assert none["compared_to"] == gym["run_id"]
+    assert none["verdict"] == "tie"
 
 
 def test_checkpoint_rows_are_not_compared_with_selection_rows(fetched):
