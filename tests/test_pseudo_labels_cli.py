@@ -169,8 +169,12 @@ def test_a_second_run_with_the_same_parameters_loads_from_the_cache(fetched, cap
         ["--min-payments", "3"],
         ["--param", "amount_tolerance=0.2"],
         ["--param", "refund_window_days=3"],
+        ["--min-payments-before", "1"],
+        ["--churn", "0.2"],
     ],
-    ids=["split", "cutoff", "min-payments", "stream-param", "another-stream-param"],
+    ids=[
+        "split", "cutoff", "min-payments", "stream-param", "another-stream-param", "min-payments-before", "churn",
+    ],
 )
 def test_changing_any_parameter_misses_the_cache(fetched, capsys, changed):
     base = {"--split": "train", "--cutoff": "2025-10-03", "--min-payments": "2"}
@@ -179,7 +183,7 @@ def test_changing_any_parameter_misses_the_cache(fetched, capsys, changed):
     assert source(run(fetched, capsys, *args)[1]) == "cached"
     merged = dict(base)
     extra = []
-    if changed[0] == "--param":
+    if changed[0] not in merged:
         extra = changed
     else:
         merged[changed[0]] = changed[1]
@@ -287,14 +291,17 @@ def test_the_fidelity_check_chooses_min_payments_and_passes(fetched, capsys):
     assert row["run_id"]
 
 
+MIN_PAYMENTS_ONLY = ("--before-candidates", "0", "--churn-candidates", "0")
+
+
 def test_the_fidelity_check_fails_when_no_setting_is_within_tolerance(fetched, capsys):
     fidelity_train(fetched)
-    code, out, _ = run(fetched, capsys, "--split", "train", "--fidelity", "--candidates", "2,3")
+    code, out, _ = run(fetched, capsys, "--split", "train", "--fidelity", "--candidates", "2,3", *MIN_PAYMENTS_ONLY)
     assert code == 0  # a failed check is a result, not an error
     report = out[out.index("fidelity"):]
     assert "none share 0.5000 vs real 0.7500: gap -0.2500, tolerance 0.05" in report
     assert "rule macro-F1 0.1875 vs real 0.2500: gap -0.0625, tolerance 0.05" in report
-    assert "chosen min_payments 2" in report
+    assert "chosen min_payments 2, min_payments_before 0, churn 0" in report
     assert report.rstrip().endswith("FAIL")
     [row] = fidelity_log_rows(fetched)
     assert row["verdict"] == "fail" and "min_payments 2" in row["change"] and "2-3" in row["change"]
@@ -302,15 +309,36 @@ def test_the_fidelity_check_fails_when_no_setting_is_within_tolerance(fetched, c
 
 def test_the_fidelity_check_prints_every_setting_it_chose_among(fetched, capsys):
     fidelity_train(fetched)
-    _, out, _ = run(fetched, capsys, "--split", "train", "--fidelity", "--candidates", "2,5")
-    table = {line.split()[0]: line.split()[1:] for line in out.splitlines() if line.strip()[:1].isdigit()}
-    assert table["2"][:2] == ["0.5000", "0.1875"] and table["5"][:2] == ["0.7500", "0.2250"]
+    _, out, _ = run(
+        fetched, capsys, "--split", "train", "--fidelity", "--candidates", "2,5", "--before-candidates", "0,1",
+        "--churn-candidates", "0,0.5",
+    )
+    table = {tuple(line.split()[:3]): line.split()[3:] for line in out.splitlines() if line.strip()[:1].isdigit()}
+    assert len(table) == 2 * 2 * 2
+    assert table[("2", "0", "0")][:2] == ["0.5000", "0.1875"] and table[("5", "0", "0")][:2] == ["0.7500", "0.2250"]
+    # B's cloud stream starts inside the Horizon: with a payment needed before the Shifted Cutoff it is none
+    assert table[("2", "1", "0")][:2] == ["0.7500", "0.2250"]
+    [row] = fidelity_log_rows(fetched)
+    for text in ("min_payments 2,5", "min_payments_before 0-1", "churn 0,0.5", "8 settings"):
+        assert text in row["change"], text
+
+
+def test_the_fidelity_check_skips_settings_that_repeat_another(fetched, capsys):
+    # two payments before the Shifted Cutoff and one in the Horizon make three: a minimum of two in all
+    # never binds then, so (min_payments 2, before 2) would repeat (3, 2)
+    fidelity_train(fetched)
+    _, out, _ = run(
+        fetched, capsys, "--split", "train", "--fidelity", "--candidates", "2,3", "--before-candidates", "0,2",
+        "--churn-candidates", "0",
+    )
+    table = [tuple(line.split()[:3]) for line in out.splitlines() if line.strip()[:1].isdigit()]
+    assert table == [("2", "0", "0"), ("3", "0", "0"), ("3", "2", "0")]
 
 
 def test_the_fidelity_check_leaves_other_log_rows_and_best_runs_alone(fetched, capsys):
     fidelity_train(fetched)
     assert run(fetched, capsys, "--split", "train", "--fidelity")[0] == 0
-    assert run(fetched, capsys, "--split", "train", "--fidelity", "--candidates", "2")[0] == 0
+    assert run(fetched, capsys, "--split", "train", "--fidelity", "--candidates", "2", *MIN_PAYMENTS_ONLY)[0] == 0
     rows = read_rows(fetched.log)
     assert [r["verdict"] for r in rows] == ["pass", "fail"]
     assert {r["row_type"] for r in rows} == {"fidelity"}
@@ -323,8 +351,83 @@ def test_the_fidelity_check_runs_on_train_only(fetched, capsys, split):
     assert not fetched.log.exists()
 
 
-def test_the_fidelity_check_chooses_min_payments_itself(fetched, capsys):
+@pytest.mark.parametrize("setting", [("--min-payments", "3"), ("--min-payments-before", "1"), ("--churn", "0.2")])
+def test_the_fidelity_check_chooses_the_labeller_settings_itself(fetched, capsys, setting):
     with pytest.raises(SystemExit):
-        fetched.run("pseudo-labels", "--split", "train", "--fidelity", "--min-payments", "3")
+        fetched.run("pseudo-labels", "--split", "train", "--fidelity", *setting)
     assert "--candidates" in capsys.readouterr().err
     assert not fetched.log.exists()
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("--candidates", "2,3"),
+        ("--before-candidates", "0,1"),
+        ("--churn-candidates", "0,0.2"),
+        ("--churn", "1"),
+        ("--churn", "-0.1"),
+        ("--min-payments-before", "-1"),
+    ],
+)
+def test_bad_labeller_options_are_refused(fetched, args):
+    with pytest.raises(SystemExit) as e:
+        fetched.run("pseudo-labels", "--split", "train", *args)
+    assert e.value.code != 0
+
+
+# --- labeller settings ----------------------------------------------------------------
+
+
+def test_the_labeller_settings_reach_the_table_and_its_name(fetched, capsys):
+    # B's cloud stream starts inside the Horizon: with a payment needed before the Shifted Cutoff it is none
+    fidelity_train(fetched)
+    code, out, _ = run(fetched, capsys, "--split", "train", "--min-payments", "2", "--min-payments-before", "1")
+    assert code == 0
+    table = fetched.root / "artifacts" / "pseudo_labels" / "train-2025-10-03-min2-before1.csv"
+    assert "min_payments 2, min_payments_before 1, churn 0" in out and str(table) in out
+    assert {r["client_id"]: r["target_next_recurring_merchant"] for r in read_rows(table)} == {
+        "A": "gym", "B": "none", "C": "none", "D": "none"
+    }
+
+    code, out, _ = run(fetched, capsys, "--split", "train", "--min-payments", "2", "--churn", "0.999")
+    assert code == 0
+    table = fetched.root / "artifacts" / "pseudo_labels" / "train-2025-10-03-min2-churn0.999.csv"
+    assert {r["target_next_recurring_merchant"] for r in read_rows(table)} == {"none"}  # every Client churns
+    assert distribution(out)["none"] == (4, 1.0)
+
+
+def churn_train(project, n=40):
+    """n Clients who all pay a gym membership every month of 2025, half of them labelled gym and half
+    none: the real task's churn at the Cutoff, which no stream inside the known history shows. So at the
+    Shifted Cutoff every Pseudo-Label is gym unless the labeller churns Clients."""
+    rows, labels = [], {}
+    for i in range(n):
+        client = f"G{i:03d}"
+        rows += _monthly(client, "gym membership", "7997", 66.0, [(m, 5) for m in range(1, 13)])
+        labels[client] = "gym" if i % 2 else "none"
+    with open(project.raw / "train_transactions.jsonl", "w") as f:
+        f.writelines(json.dumps(r) + "\n" for r in rows)
+    pd.DataFrame(
+        {"client_id": list(labels), "cutoff_date": "2026-01-01", "target_next_recurring_merchant": list(labels.values())}
+    ).to_csv(project.raw / "train_labels.csv", index=False)
+
+
+def test_the_fidelity_check_chooses_churn_when_that_closes_the_gaps(fetched, capsys):
+    churn_train(fetched)
+    code, out, _ = run(
+        fetched, capsys, "--split", "train", "--fidelity", "--candidates", "2", "--before-candidates", "0",
+        "--churn-candidates", "0,0.5",
+    )
+    assert code == 0
+    report = out[out.index("fidelity"):]
+    # without churn every Pseudo-Label is gym: none share 0 against a real 0.5
+    assert "  2             0       0      0.0000" in report
+    assert "chosen min_payments 2, min_payments_before 0, churn 0.5" in report
+    assert report.rstrip().endswith("PASS")
+    table = fetched.root / "artifacts" / "pseudo_labels" / "train-2025-10-03-min2-churn0.5.csv"
+    churned = [r["target_next_recurring_merchant"] for r in read_rows(table)]
+    assert set(churned) == {"gym", "none"}
+    assert f"none share {churned.count('none') / len(churned):.4f} vs real 0.5000" in report
+    [row] = fidelity_log_rows(fetched)
+    assert row["verdict"] == "pass" and "churn 0.5" in row["change"]

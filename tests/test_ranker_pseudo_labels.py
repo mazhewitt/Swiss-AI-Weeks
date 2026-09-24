@@ -191,7 +191,38 @@ def test_the_log_row_records_the_sources_shifted_cutoffs_weight_and_training_cli
     assert row["pseudo_sources"] == "unlabeled@2025-10-03;train@2025-09-01"
     assert row["pseudo_weight"] == "0.25"
     assert row["pseudo_min_payments"] == "4"
+    assert (row["pseudo_min_payments_before"], row["pseudo_churn"]) == ("0", "0")
     assert row["training_clients"] == str(2 * len(train) + len(unlabeled))
+
+
+def test_the_labeller_settings_are_recorded_in_the_metadata_and_the_log_row(fetched, capsys):
+    pooled_project(fetched)
+    assert fetched.run(
+        "train", "--model", "ranker", "--pseudo", "unlabeled", "--pseudo-min-payments", "3",
+        "--pseudo-min-payments-before", "1", "--pseudo-churn", "0.2",
+    ) == 0
+    assert "min_payments 3, min_payments_before 1, churn 0.2" in capsys.readouterr().out
+    saved = meta(fetched)["pseudo"]
+    assert (saved["min_payments"], saved["min_payments_before"], saved["churn"]) == (3, 1, 0.2)
+    assert fetched.run("evaluate", "--model", "ranker") == 0
+    row = read_rows(fetched.log)[-1]
+    assert (row["pseudo_min_payments"], row["pseudo_min_payments_before"], row["pseudo_churn"]) == ("3", "1", "0.2")
+
+
+def test_churned_pseudo_labels_teach_the_ranker_more_none(fetched):
+    # every real train label is none and the unlabelled Clients' Pseudo-Labels teach the families; churning
+    # most of them at the Shifted Cutoff turns their labels to none, so the ranker trusts streams less
+    write_transactions(fetched, "train", [row for c in ("N1", "N2", "N3") for row in shop(c)])
+    write_labels(fetched, "train", {"N1": "none", "N2": "none", "N3": "none"})
+    separable_split(fetched, "valid", "V", 8, np.random.default_rng(4))
+    pseudo_histories(fetched, "unlabeled", "U")
+    none = []
+    for churn in ("0", "0.8"):
+        out = fetched.root / f"proba-{churn}.csv"
+        assert fetched.run("train", "--model", "ranker", "--pseudo", "unlabeled", "--pseudo-churn", churn) == 0
+        assert fetched.run("evaluate", "--model", "ranker", "--proba", str(out)) == 0
+        none.append(pd.read_csv(out, dtype={"client_id": str})["none"].mean())
+    assert none[1] > none[0] + 0.2
 
 
 def test_a_real_label_run_leaves_the_pseudo_label_columns_blank(fetched):
@@ -256,6 +287,11 @@ def test_a_shifted_cutoff_whose_horizon_is_not_fully_observed_is_refused(fetched
         ("train", "--model", "ranker", "--pseudo", "labels"),
         ("train", "--model", "ranker", "--pseudo", "unlabeled:yesterday"),
         ("train", "--model", "ranker", "--pseudo", "unlabeled", "--pseudo-min-payments", "1"),
+        ("train", "--model", "ranker", "--pseudo", "unlabeled", "--pseudo-min-payments-before", "-1"),
+        ("train", "--model", "ranker", "--pseudo", "unlabeled", "--pseudo-churn", "1"),
+        ("cv", "--model", "ranker", "--pseudo", "unlabeled", "--pseudo-churn", "-0.2"),
+        ("train", "--model", "ranker", "--pseudo-churn", "0.2"),
+        ("cv", "--model", "ranker", "--pseudo-min-payments-before", "1"),
     ],
 )
 def test_bad_pseudo_label_options_are_refused(fetched, args):

@@ -7,24 +7,29 @@ from pathlib import Path
 import pytest
 
 from recurring_family.cli import main
-from recurring_family.pseudo import FIDELITY_CANDIDATES, PSEUDO_MIN_PAYMENTS
+from recurring_family.pseudo import (
+    FIDELITY_BEFORE_CANDIDATES, FIDELITY_CANDIDATES, FIDELITY_CHURN_CANDIDATES, PSEUDO_CHURN, PSEUDO_MIN_PAYMENTS,
+    PSEUDO_MIN_PAYMENTS_BEFORE,
+)
 
 REPO = Path(__file__).resolve().parents[1]
 REAL_RAW = REPO / "data" / "raw"
 
 # What the check found on the real train split at the default Shifted Cutoff (2025-10-03), choosing
-# among min_payments 2-10. The real task: none share 0.2985, milestone-2 rule macro-F1 0.5331. No
-# setting brings both within 0.05: the none share reaches the real one only at 7 payments, where the
-# rule scores 0.78 against Pseudo-Labels. The chosen setting has the smallest worse gap.
-CHOSEN_MIN_PAYMENTS = 4
+# among min_payments 2-10, min_payments_before 0-3 and churn 0-0.3 (ticket 08). The real task: none
+# share 0.2985, milestone-2 rule macro-F1 0.5331. Without churn no setting brings both within 0.05
+# (ticket 04: the none share reaches the real one only at 7 payments, where the rule scores 0.78):
+# streams inside the known history almost never stop, but at the real Cutoff many do. Churning a
+# fifth of the Clients at the Shifted Cutoff closes both gaps.
+CHOSEN = "min_payments 3, min_payments_before 0, churn 0.2"
 REAL_NONE_SHARE = 0.2985
 REAL_RULE_MACRO_F1 = 0.5331
-PSEUDO_NONE_SHARE = 0.1535
-PSEUDO_RULE_MACRO_F1 = 0.6453
+PSEUDO_NONE_SHARE = 0.3035
+PSEUDO_RULE_MACRO_F1 = 0.5433
 
 
 @pytest.mark.slow
-def test_the_fidelity_check_on_train_chooses_and_records_min_payments(tmp_path, capsys):
+def test_the_fidelity_check_on_train_chooses_and_records_the_labeller_settings(tmp_path, capsys):
     if not (REAL_RAW / "train_labels.csv").exists():
         pytest.skip("real data missing: run `uv run rf fetch-data` first")
     (tmp_path / "data").mkdir()
@@ -38,10 +43,14 @@ def test_the_fidelity_check_on_train_chooses_and_records_min_payments(tmp_path, 
     with open(tmp_path / "experiments" / "log.csv", newline="") as f:
         [row] = list(csv.DictReader(f))
     assert (row["row_type"], row["split"], row["model"]) == ("fidelity", "train", "rules+gate4")
-    assert f"chosen min_payments {CHOSEN_MIN_PAYMENTS}" in out
-    assert f"min_payments {CHOSEN_MIN_PAYMENTS} (chosen from 2-10)" in row["change"]
-    # the command's default is the setting the check chose
-    assert PSEUDO_MIN_PAYMENTS == CHOSEN_MIN_PAYMENTS and FIDELITY_CANDIDATES == tuple(range(2, 11))
+    assert f"chosen {CHOSEN}" in out
+    assert f"{CHOSEN} (chosen from min_payments 2-10 x min_payments_before 0-3 x churn 0,0.1,0.15,0.2,0.25,0.3" in (
+        row["change"]
+    )
+    assert FIDELITY_CANDIDATES == tuple(range(2, 11)) and FIDELITY_BEFORE_CANDIDATES == (0, 1, 2, 3)
+    assert FIDELITY_CHURN_CANDIDATES == (0.0, 0.1, 0.15, 0.2, 0.25, 0.3)
+    # the defaults stay ticket 04's: the ranker trained on the chosen Pseudo-Labels only tied it on train
+    assert (PSEUDO_MIN_PAYMENTS, PSEUDO_MIN_PAYMENTS_BEFORE, PSEUDO_CHURN) == (4, 0, 0.0)
 
     assert f"vs real {REAL_NONE_SHARE:.4f}" in out
     assert f"vs real {REAL_RULE_MACRO_F1:.4f}" in out
@@ -49,7 +58,7 @@ def test_the_fidelity_check_on_train_chooses_and_records_min_payments(tmp_path, 
     assert float(row["delta"]) == pytest.approx(PSEUDO_RULE_MACRO_F1 - REAL_RULE_MACRO_F1, abs=0.005)
     none_share = float(re.search(r"none share ([0-9.]+) vs real", row["conclusion"]).group(1))
     assert none_share == pytest.approx(PSEUDO_NONE_SHARE, abs=0.005)
-    assert row["verdict"] == "fail" and out.rstrip().endswith("FAIL")
+    assert row["verdict"] == "pass" and out.rstrip().endswith("PASS")
 
-    table = tmp_path / "artifacts" / "pseudo_labels" / f"train-2025-10-03-min{CHOSEN_MIN_PAYMENTS}.csv"
+    table = tmp_path / "artifacts" / "pseudo_labels" / "train-2025-10-03-min3-churn0.2.csv"
     assert sum(1 for _ in open(table)) == 2000 + 1  # one row per train Client, plus the header

@@ -15,7 +15,8 @@ LOG_COLUMNS = [
     "delta", "verdict", "compared_to", "coverage", "selection_accuracy",
     # what the model was trained on: all Clients (real-labelled plus Pseudo-Labelled), the Pseudo-Label
     # sources (split@Shifted Cutoff) and their settings, and the latest fidelity check when it was trained
-    "training_clients", "pseudo_sources", "pseudo_weight", "pseudo_min_payments", "fidelity",
+    "training_clients", "pseudo_sources", "pseudo_weight", "pseudo_min_payments", "pseudo_min_payments_before",
+    "pseudo_churn", "fidelity",
     "conclusion",
 ]
 

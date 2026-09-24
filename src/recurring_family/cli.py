@@ -20,12 +20,13 @@ from .evaluation import append_log, latest_fidelity, log_row, paired_bootstrap, 
 from .fetch import fetch_data
 from .models import MODELS, predict_labels
 from .pseudo import (
-    FIDELITY_CANDIDATES, NONE_SHARE_TOLERANCE, PSEUDO_MIN_PAYMENTS, RULE_F1_TOLERANCE, fidelity_check, milestone2_rule,
+    FIDELITY_BEFORE_CANDIDATES, FIDELITY_CANDIDATES, FIDELITY_CHURN_CANDIDATES, NONE_SHARE_TOLERANCE, PSEUDO_CHURN,
+    PSEUDO_MIN_PAYMENTS, PSEUDO_MIN_PAYMENTS_BEFORE, RULE_F1_TOLERANCE, fidelity_check, milestone2_rule, search_space,
 )
 from .blend import DEFAULT_RULE_WEIGHT
 from .ranker import PSEUDO_WEIGHT, pseudo_examples
 from .rules import DEFAULT_NONE_GATE, DEFAULT_ORDERING, ORDERINGS
-from .streams import StreamParams, cached_pseudo_labels, cached_streams
+from .streams import LabellerParams, StreamParams, cached_pseudo_labels, cached_streams
 from .submission import InvalidSubmission, read_submission, validate, write_submission
 
 DEFAULT_ZIP = Path("hackathons") / "2026" / "data" / "dataset.zip"
@@ -49,8 +50,14 @@ class Paths:
     def pseudo_labels(self) -> Path:
         return self.artifacts / "pseudo_labels"
 
-    def pseudo_label_table(self, split: str, cutoff: pd.Timestamp, min_payments: int) -> Path:
-        return self.pseudo_labels / f"{split}-{cutoff:%Y-%m-%d}-min{min_payments}.csv"
+    def pseudo_label_table(self, split: str, cutoff: pd.Timestamp, labeller: LabellerParams) -> Path:
+        """`<split>-<cutoff>-min<N>.csv`, plus `-before<K>` and `-churn<P>` when those are set."""
+        name = f"min{labeller.min_payments}"
+        if labeller.min_payments_before:
+            name += f"-before{labeller.min_payments_before}"
+        if labeller.churn:
+            name += f"-churn{labeller.churn:g}"
+        return self.pseudo_labels / f"{split}-{cutoff:%Y-%m-%d}-{name}.csv"
 
     def model(self, name: str) -> Path:
         return self.artifacts / f"{name}.json"
@@ -204,15 +211,65 @@ def payment_counts(text: str) -> tuple[int, ...]:
     return values
 
 
-def _settings_text(values: tuple[int, ...]) -> str:
-    """2-10 for a run of consecutive settings, else 2,5."""
-    if len(values) > 1 and values == tuple(range(values[0], values[-1] + 1)):
-        return f"{values[0]}-{values[-1]}"
-    return ",".join(str(v) for v in values)
+def payments_before(text: str) -> int:
+    """A whole number of payments, 0 or more (0: no minimum)."""
+    try:
+        n = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a number of payments, 0 or more; got {text!r}") from None
+    if n < 0:
+        raise argparse.ArgumentTypeError(f"expected a number of payments, 0 or more; got {text!r}")
+    return n
 
 
-def _pseudo_label_tables(args, paths: Paths, params: StreamParams, settings: tuple[int, ...]):
-    """{min_payments: (labels, cached)} for the split, made without reading any label file."""
+def payments_before_counts(text: str) -> tuple[int, ...]:
+    """Comma-separated minimum-payments-before settings, e.g. 0,1,3."""
+    return tuple(sorted({payments_before(v) for v in text.split(",")}))
+
+
+def churn_share(text: str) -> float:
+    """A share of Clients, from 0 up to (not including) 1."""
+    try:
+        share = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a share of Clients from 0 up to 1; got {text!r}") from None
+    if not 0.0 <= share < 1.0:
+        raise argparse.ArgumentTypeError(f"expected a share of Clients from 0 up to 1; got {text!r}")
+    return share
+
+
+def churn_shares(text: str) -> tuple[float, ...]:
+    """Comma-separated churn settings, e.g. 0,0.1,0.2."""
+    return tuple(sorted({churn_share(v) for v in text.split(",")}))
+
+
+def _settings_text(values: tuple) -> str:
+    """2-10 for a run of consecutive whole-number settings, else 2,5 (or 0,0.1,0.2)."""
+    if len(values) > 1 and all(float(v).is_integer() for v in values) and (
+        tuple(int(v) for v in values) == tuple(range(int(values[0]), int(values[-1]) + 1))
+    ):
+        return f"{int(values[0])}-{int(values[-1])}"
+    return ",".join(f"{v:g}" for v in values)
+
+
+def _labeller(min_payments: int | None, min_payments_before: int | None, churn: float | None) -> LabellerParams:
+    """The labeller settings given, the Pseudo-Label defaults for the rest."""
+    return LabellerParams(
+        min_payments=min_payments or PSEUDO_MIN_PAYMENTS,
+        min_payments_before=PSEUDO_MIN_PAYMENTS_BEFORE if min_payments_before is None else min_payments_before,
+        churn=PSEUDO_CHURN if churn is None else churn,
+    )
+
+
+def _labeller_text(labeller: LabellerParams) -> str:
+    return (
+        f"min_payments {labeller.min_payments}, min_payments_before {labeller.min_payments_before}, "
+        f"churn {labeller.churn:g}"
+    )
+
+
+def _pseudo_label_tables(args, paths: Paths, params: StreamParams, settings: tuple[LabellerParams, ...]):
+    """{labeller settings: (labels, cached)} for the split, made without reading any label file."""
     try:
         with data.pseudo_labelling():
             return cached_pseudo_labels(
@@ -228,20 +285,27 @@ def cmd_pseudo_labels(args, paths: Paths) -> int:
     params = dataclasses.replace(StreamParams(), **dict(args.param))
     if args.fidelity and args.split != "train":
         raise data.DataError("the fidelity check compares with real labels, so it runs on --split train only")
-    candidates = args.candidates or FIDELITY_CANDIDATES
-    settings = candidates if args.fidelity else (args.min_payments or PSEUDO_MIN_PAYMENTS,)
+    candidates = (
+        args.candidates or FIDELITY_CANDIDATES,
+        args.before_candidates or FIDELITY_BEFORE_CANDIDATES,
+        args.churn_candidates or FIDELITY_CHURN_CANDIDATES,
+    )
+    if args.fidelity:
+        settings = search_space(*candidates)
+    else:
+        settings = (_labeller(args.min_payments, args.min_payments_before, args.churn),)
     tables = _pseudo_label_tables(args, paths, params, settings)
     fidelity = _fidelity(paths, args.cutoff, tables) if args.fidelity else None
-    min_payments = fidelity.chosen.min_payments if fidelity else settings[0]
-    labels, cached = tables[min_payments]
+    labeller = fidelity.chosen.labeller if fidelity else settings[0]
+    labels, cached = tables[labeller]
 
-    out = Path(args.out) if args.out else paths.pseudo_label_table(args.split, args.cutoff, min_payments)
+    out = Path(args.out) if args.out else paths.pseudo_label_table(args.split, args.cutoff, labeller)
     out.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(
         {"client_id": labels.index, "cutoff_date": f"{args.cutoff:%Y-%m-%d}", LABEL_COLUMN: labels.to_numpy()}
     ).to_csv(out, index=False)
     print(
-        f"pseudo-labels: {args.split} at Shifted Cutoff {args.cutoff:%Y-%m-%d}, min_payments {min_payments} "
+        f"pseudo-labels: {args.split} at Shifted Cutoff {args.cutoff:%Y-%m-%d}, {_labeller_text(labeller)} "
         f"({len(labels)} Clients) [{'cached' if cached else 'labelled'}] -> {out}"
     )
     counts = labels.value_counts()
@@ -249,7 +313,7 @@ def cmd_pseudo_labels(args, paths: Paths) -> int:
         n = int(counts.get(label, 0))
         print(f"  {label:<10} {n:>6} {n / max(len(labels), 1):.4f}")
     if fidelity is not None:
-        _report_fidelity(args, paths, candidates, fidelity)
+        _report_fidelity(args, paths, candidates, settings, fidelity)
     return 0
 
 
@@ -273,7 +337,7 @@ def _fidelity(paths: Paths, cutoff: pd.Timestamp, tables):
     )
 
 
-def _report_fidelity(args, paths: Paths, candidates: tuple[int, ...], fidelity) -> None:
+def _report_fidelity(args, paths: Paths, candidates: tuple[tuple, ...], settings: tuple, fidelity) -> None:
     rule = milestone2_rule()
     rule_name = rule.name + rule.variant
     chosen = fidelity.chosen
@@ -282,10 +346,11 @@ def _report_fidelity(args, paths: Paths, candidates: tuple[int, ...], fidelity) 
         f"fidelity check: train at Shifted Cutoff {args.cutoff:%Y-%m-%d} against the real Cutoff, "
         f"rule {rule_name}"
     )
-    print("  min_payments  none share  rule macro-F1  none gap  rule gap")
+    print("  min_payments  before  churn  none share  rule macro-F1  none gap  rule gap")
     for s in fidelity.settings:
         print(
-            f"  {s.min_payments:<12}  {s.none_share:.4f}      {s.rule_macro_f1:.4f}         "
+            f"  {s.min_payments:<12}  {s.labeller.min_payments_before:<6}  {s.labeller.churn:<5g}  "
+            f"{s.none_share:.4f}      {s.rule_macro_f1:.4f}         "
             f"{s.none_gap:+.4f}   {s.rule_gap:+.4f}  {'pass' if s.passed else 'fail'}"
         )
     none_text = (
@@ -296,16 +361,17 @@ def _report_fidelity(args, paths: Paths, candidates: tuple[int, ...], fidelity) 
         f"rule macro-F1 {chosen.rule_macro_f1:.4f} vs real {fidelity.real_rule_macro_f1:.4f}: "
         f"gap {chosen.rule_gap:+.4f}, tolerance {RULE_F1_TOLERANCE:.2f}"
     )
-    print(f"  chosen min_payments {chosen.min_payments} (smallest worse gap relative to its tolerance)")
+    print(f"  chosen {_labeller_text(chosen.labeller)} (smallest worse gap relative to its tolerance)")
     print(f"  {none_text}")
     print(f"  {rule_text}")
     print(f"  {verdict}")
 
     overrides = ", ".join(f"{k}={v}" for k, v in args.param) or "defaults"
+    min_payments, before, churn = (_settings_text(values) for values in candidates)
     change = (
         f"Pseudo-Label fidelity check: Shifted Cutoff {args.cutoff:%Y-%m-%d}, Horizon {HORIZON.days} days, "
-        f"min_payments {chosen.min_payments} (chosen from {_settings_text(candidates)}), "
-        f"labeller stream params {overrides}"
+        f"{_labeller_text(chosen.labeller)} (chosen from min_payments {min_payments} x min_payments_before "
+        f"{before} x churn {churn}: {len(settings)} settings), labeller stream params {overrides}"
     )
     conclusion = f"{none_text}; {rule_text}; {verdict}"
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:6]
@@ -361,11 +427,13 @@ def _pseudo_training(args, paths: Paths) -> tuple[pd.DataFrame | None, dict | No
     if not getattr(args, "pseudo", None):
         return None, None
     weight = PSEUDO_WEIGHT if args.pseudo_weight is None else args.pseudo_weight
-    minimum = args.pseudo_min_payments or PSEUDO_MIN_PAYMENTS
+    labeller = _labeller(
+        args.pseudo_min_payments, getattr(args, "pseudo_min_payments_before", None), getattr(args, "pseudo_churn", None)
+    )
     parts, sources = [], []
     for split, cutoff in args.pseudo:
         args_for_split = argparse.Namespace(split=split, cutoff=cutoff)
-        [(labels, _)] = _pseudo_label_tables(args_for_split, paths, StreamParams(), (minimum,)).values()
+        [(labels, _)] = _pseudo_label_tables(args_for_split, paths, StreamParams(), (labeller,)).values()
         with data.pseudo_labelling():
             streams, _ = cached_streams(paths.raw, split, paths.streams, cutoff=cutoff)
         rows = pseudo_examples(streams, labels, cutoff)
@@ -373,7 +441,11 @@ def _pseudo_training(args, paths: Paths) -> tuple[pd.DataFrame | None, dict | No
         rows["client_id"] = f"{split}@{cutoff:%Y-%m-%d}:" + rows["client_id"].astype(str)
         parts.append(rows)
         sources.append({"split": split, "cutoff": f"{cutoff:%Y-%m-%d}", "clients": int(len(labels))})
-    info = {"sources": sources, "weight": weight, "min_payments": minimum, "fidelity": latest_fidelity(paths.log)}
+    info = {
+        "sources": sources, "weight": weight, "min_payments": labeller.min_payments,
+        "min_payments_before": labeller.min_payments_before, "churn": labeller.churn,
+        "fidelity": latest_fidelity(paths.log),
+    }
     return pd.concat(parts, ignore_index=True), info
 
 
@@ -381,10 +453,15 @@ def _sources_text(pseudo: dict) -> str:
     return ";".join(f"{s['split']}@{s['cutoff']}" for s in pseudo["sources"])
 
 
+def _saved_labeller(pseudo: dict) -> LabellerParams:
+    """The labeller settings a model was trained with; models saved before ticket 08 had min_payments only."""
+    return LabellerParams(pseudo["min_payments"], pseudo.get("min_payments_before", 0), pseudo.get("churn", 0.0))
+
+
 def _pseudo_text(pseudo: dict) -> str:
     return (
         f"Pseudo-Labels {', '.join(_sources_text(pseudo).split(';'))}, weight {pseudo['weight']:g}, "
-        f"min_payments {pseudo['min_payments']}"
+        f"{_labeller_text(_saved_labeller(pseudo))}"
     )
 
 
@@ -607,6 +684,8 @@ def cmd_evaluate(args, paths: Paths) -> int:
                 "pseudo_sources": _sources_text(pseudo),
                 "pseudo_weight": f"{pseudo['weight']:g}",
                 "pseudo_min_payments": pseudo["min_payments"],
+                "pseudo_min_payments_before": _saved_labeller(pseudo).min_payments_before,
+                "pseudo_churn": f"{_saved_labeller(pseudo).churn:g}",
                 "fidelity": _fidelity_column(pseudo),
             }
         )
@@ -730,6 +809,31 @@ def _rule_arguments(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _pseudo_arguments(p: argparse.ArgumentParser) -> None:
+    """The ranker's Pseudo-Label sources and the labeller settings they are made with, for `train` and `cv`."""
+    p.add_argument(
+        "--pseudo", type=pseudo_source, action="append", default=[], metavar="SPLIT[:YYYY-MM-DD]",
+        help="ranker and blend: also fit the ranker on this split's Clients Pseudo-Labelled at a Shifted Cutoff "
+        f"(default {SHIFTED_CUTOFF:%Y-%m-%d}); repeatable. They are never scored out of fold",
+    )
+    p.add_argument(
+        "--pseudo-weight", type=positive_weight, metavar="W",
+        help=f"--pseudo: sample weight of the Pseudo-Labelled Clients (default {PSEUDO_WEIGHT}; real ones weigh 1)",
+    )
+    p.add_argument(
+        "--pseudo-min-payments", type=min_payments, metavar="N",
+        help=f"--pseudo: payments a stream needs for its Horizon payment to count (default {PSEUDO_MIN_PAYMENTS})",
+    )
+    p.add_argument(
+        "--pseudo-min-payments-before", type=payments_before, metavar="K",
+        help=f"--pseudo: of those, payments it needs before the Shifted Cutoff (default {PSEUDO_MIN_PAYMENTS_BEFORE})",
+    )
+    p.add_argument(
+        "--pseudo-churn", type=churn_share, metavar="P",
+        help=f"--pseudo: share of Clients whose streams all stop at the Shifted Cutoff (default {PSEUDO_CHURN:g})",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--root", default=".", help="project root (default: current directory)")
@@ -764,20 +868,42 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--min-payments", type=payment_count, metavar="N",
         help="payments a Recurring Stream needs for its Horizon payment to count "
-        f"(default {PSEUDO_MIN_PAYMENTS}, the fidelity check's choice)",
+        f"(default {PSEUDO_MIN_PAYMENTS})",
+    )
+    p.add_argument(
+        "--min-payments-before", type=payments_before, metavar="K",
+        help="of those, payments it needs before the Shifted Cutoff; 1 ignores streams that start inside the Horizon "
+        f"(default {PSEUDO_MIN_PAYMENTS_BEFORE})",
+    )
+    p.add_argument(
+        "--churn", type=churn_share, metavar="P",
+        help="share of Clients whose streams all stop at the Shifted Cutoff, as streams stop at the real Cutoff: "
+        f"they get none (default {PSEUDO_CHURN:g})",
     )
     p.add_argument(
         "--param", type=stream_param, action="append", default=[], metavar="NAME=VALUE",
         help="override one stream detection parameter of the labeller (repeatable)",
     )
-    p.add_argument("--out", metavar="CSV", help="default: <root>/artifacts/pseudo_labels/<split>-<cutoff>-min<N>.csv")
+    p.add_argument(
+        "--out", metavar="CSV",
+        help="default: <root>/artifacts/pseudo_labels/<split>-<cutoff>-min<N>[-before<K>][-churn<P>].csv",
+    )
     p.add_argument(
         "--fidelity", action="store_true",
-        help="train only: compare the Pseudo-Label task with the real one, choose min_payments, log the result",
+        help="train only: compare the Pseudo-Label task with the real one, choose the labeller settings, log the result",
     )
     p.add_argument(
         "--candidates", type=payment_counts, metavar="N,N,...",
         help=f"--fidelity: the min_payments settings to choose among (default {_settings_text(FIDELITY_CANDIDATES)})",
+    )
+    p.add_argument(
+        "--before-candidates", type=payments_before_counts, metavar="K,K,...",
+        help="--fidelity: the min_payments_before settings to choose among "
+        f"(default {_settings_text(FIDELITY_BEFORE_CANDIDATES)})",
+    )
+    p.add_argument(
+        "--churn-candidates", type=churn_shares, metavar="P,P,...",
+        help=f"--fidelity: the churn settings to choose among (default {_settings_text(FIDELITY_CHURN_CANDIDATES)})",
     )
     p.set_defaults(func=cmd_pseudo_labels)
 
@@ -790,19 +916,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="tuned: also fit the E3 decision layer on out-of-fold probabilities",
     )
     p.add_argument("--folds", type=int, default=CV_FOLDS, help="folds for the tuned decision layer's out-of-fold fit")
-    p.add_argument(
-        "--pseudo", type=pseudo_source, action="append", default=[], metavar="SPLIT[:YYYY-MM-DD]",
-        help="ranker and blend: also fit the ranker on this split's Clients Pseudo-Labelled at a Shifted Cutoff "
-        f"(default {SHIFTED_CUTOFF:%Y-%m-%d}); repeatable. They are never scored out of fold",
-    )
-    p.add_argument(
-        "--pseudo-weight", type=positive_weight, metavar="W",
-        help=f"--pseudo: sample weight of the Pseudo-Labelled Clients (default {PSEUDO_WEIGHT}; real ones weigh 1)",
-    )
-    p.add_argument(
-        "--pseudo-min-payments", type=min_payments, metavar="N",
-        help=f"--pseudo: payments a stream needs for its Horizon payment to count (default {PSEUDO_MIN_PAYMENTS})",
-    )
+    _pseudo_arguments(p)
     p.set_defaults(func=cmd_train)
 
     p = sub.add_parser("cv", parents=[common], help="stratified k-fold out-of-fold probabilities")
@@ -811,19 +925,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--folds", type=int, default=CV_FOLDS)
     p.add_argument("--out", metavar="CSV", help="default: <root>/artifacts/oof/<model>.csv")
     _rule_arguments(p)
-    p.add_argument(
-        "--pseudo", type=pseudo_source, action="append", default=[], metavar="SPLIT[:YYYY-MM-DD]",
-        help="ranker and blend: also fit the ranker on this split's Clients Pseudo-Labelled at a Shifted Cutoff "
-        f"(default {SHIFTED_CUTOFF:%Y-%m-%d}); repeatable. They are never scored out of fold",
-    )
-    p.add_argument(
-        "--pseudo-weight", type=positive_weight, metavar="W",
-        help=f"--pseudo: sample weight of the Pseudo-Labelled Clients (default {PSEUDO_WEIGHT}; real ones weigh 1)",
-    )
-    p.add_argument(
-        "--pseudo-min-payments", type=min_payments, metavar="N",
-        help=f"--pseudo: payments a stream needs for its Horizon payment to count (default {PSEUDO_MIN_PAYMENTS})",
-    )
+    _pseudo_arguments(p)
     p.set_defaults(func=cmd_cv)
 
     p = sub.add_parser(
@@ -886,17 +988,26 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--rule-weight applies to --model blend only")
         if args.pseudo and args.model not in ("ranker", "blend"):
             parser.error("--pseudo applies to --model ranker and blend only")
-        if not args.pseudo and (args.pseudo_weight is not None or args.pseudo_min_payments is not None):
-            parser.error("--pseudo-weight and --pseudo-min-payments apply to --pseudo only")
+        labeller_options = (args.pseudo_min_payments, args.pseudo_min_payments_before, args.pseudo_churn)
+        if not args.pseudo and (args.pseudo_weight is not None or any(v is not None for v in labeller_options)):
+            parser.error(
+                "--pseudo-weight, --pseudo-min-payments, --pseudo-min-payments-before and --pseudo-churn "
+                "apply to --pseudo only"
+            )
         if len(set(args.pseudo)) < len(args.pseudo):
             parser.error("give each Pseudo-Label source (split and Shifted Cutoff) once")
     if args.command == "compare" and (len(args.run) < 2 or len(set(args.run)) < len(args.run)):
         parser.error("give at least two distinct --run candidates")
     if args.command == "pseudo-labels":
-        if args.fidelity and args.min_payments is not None:
-            parser.error("--fidelity chooses min_payments itself; give the settings to choose among with --candidates")
-        if not args.fidelity and args.candidates is not None:
-            parser.error("--candidates applies to --fidelity only")
+        if args.fidelity and any(v is not None for v in (args.min_payments, args.min_payments_before, args.churn)):
+            parser.error(
+                "--fidelity chooses the labeller settings itself; give the settings to choose among with "
+                "--candidates, --before-candidates and --churn-candidates"
+            )
+        if not args.fidelity and any(
+            v is not None for v in (args.candidates, args.before_candidates, args.churn_candidates)
+        ):
+            parser.error("--candidates, --before-candidates and --churn-candidates apply to --fidelity only")
     paths = Paths(Path(args.root))
     try:
         return args.func(args, paths)

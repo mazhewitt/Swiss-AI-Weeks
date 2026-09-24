@@ -975,6 +975,76 @@ def test_injecting_decoys_leaves_every_pseudo_label_unchanged():
     assert moved["C1"] == "streaming" and moved["C2"] == "cloud"
 
 
+# --- labeller settings: payments before the Shifted Cutoff, churn at it ------------------
+
+
+def test_a_minimum_of_payments_before_the_shifted_cutoff_ignores_streams_that_start_inside_the_horizon():
+    rows = series("C1", "saas suite", "5734", 19, "2025-10-05", 3)  # new: 10-05, 11-04, 12-04
+    rows += monthly("C1", "phone contract", "4814", 47, "2025-06-01")  # 5 payments before, first due 2025-10-29
+    rows += series("C2", "saas suite", "5734", 19, "2025-10-05", 3)  # only a new stream
+    assert pseudo_labels(history(rows), SHIFTED).to_dict() == {"C1": "software", "C2": "software"}
+    assert pseudo_labels(history(rows), SHIFTED, min_payments_before=1).to_dict() == {"C1": "mobile", "C2": "none"}
+    # the phone contract has five payments before the Shifted Cutoff: a sixth minimum drops it too
+    assert pseudo_labels(history(rows), SHIFTED, min_payments_before=5).to_dict() == {"C1": "mobile", "C2": "none"}
+    assert pseudo_labels(history(rows), SHIFTED, min_payments_before=6).to_dict() == {"C1": "none", "C2": "none"}
+
+
+def test_the_minimum_before_counts_only_payments_before_the_shifted_cutoff():
+    # 08-20 and 09-19 before the Shifted Cutoff, 10-19 .. 12-18 in the Horizon: five payments in all
+    rows = series("C1", "gym membership", "7997", 66, "2025-08-20", 5)
+    assert pseudo_labels(history(rows), SHIFTED, min_payments=5, min_payments_before=2)["C1"] == "gym"
+    assert pseudo_labels(history(rows), SHIFTED, min_payments=5, min_payments_before=3)["C1"] == "none"
+
+
+def _long_stream_clients(n):
+    """n Clients, each paying a gym membership every month of 2025: every one's Pseudo-Label is gym."""
+    rows = []
+    for i in range(n):
+        rows += monthly(f"C{i:03d}", "gym membership", "7997", 66, f"2025-01-{1 + i % 28:02d}")
+    return history(rows)
+
+
+def test_churn_makes_that_share_of_clients_none_whatever_they_paid_in_the_horizon():
+    tx_ = _long_stream_clients(400)
+    assert set(pseudo_labels(tx_, SHIFTED)) == {"gym"}
+    churned = pseudo_labels(tx_, SHIFTED, churn=0.25)
+    assert set(churned) == {"gym", "none"}
+    assert (churned == "none").mean() == pytest.approx(0.25, abs=0.05)
+    assert set(pseudo_labels(tx_, SHIFTED, churn=0.0)) == {"gym"}
+
+
+def test_churn_is_a_fixed_draw_so_a_larger_share_churns_a_superset_of_clients():
+    tx_ = _long_stream_clients(200)
+    once = pseudo_labels(tx_, SHIFTED, churn=0.2)
+    pd.testing.assert_series_equal(pseudo_labels(tx_.sample(frac=1, random_state=3), SHIFTED, churn=0.2), once)
+    more = pseudo_labels(tx_, SHIFTED, churn=0.4)
+    assert set(once[once == "none"].index) < set(more[more == "none"].index)
+
+
+def test_a_client_churns_independently_at_each_shifted_cutoff():
+    tx_ = _long_stream_clients(200)
+    october = pseudo_labels(tx_, SHIFTED, churn=0.3)
+    july = pseudo_labels(tx_, pd.Timestamp("2025-07-05", tz="UTC"), churn=0.3)
+    assert set(october[october == "none"].index) != set(july[july == "none"].index)
+
+
+def test_churn_only_ever_turns_a_label_into_none():
+    base = history(_horizon_histories())
+    for churn in (0.3, 0.6, 0.9):
+        churned = pseudo_labels(base, SHIFTED, churn=churn)
+        assert all(label in ("none", _HORIZON_LABELS[client]) for client, label in churned.items())
+
+
+@pytest.mark.parametrize(
+    "setting, message",
+    [({"churn": 1.0}, "churn"), ({"churn": -0.1}, "churn"), ({"min_payments_before": -1}, "min_payments_before")],
+)
+def test_labeller_settings_out_of_range_are_refused(setting, message):
+    rows = monthly("C1", "gym membership", "7997", 66, "2025-04-22")
+    with pytest.raises(ValueError, match=message):
+        pseudo_labels(history(rows), SHIFTED, **setting)
+
+
 # --- inputs at a Shifted Cutoff ------------------------------------------------------
 
 
