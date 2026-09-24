@@ -9,7 +9,7 @@ from .config import LABEL_COLUMN, PREDICTION_COLUMN
 SPLITS = ("train", "valid", "test", "unlabeled")
 LABELLED_SPLITS = ("train", "valid")
 
-_TRANSACTION_FILES = {
+TRANSACTION_FILES = {
     "train": "train_transactions.jsonl",
     "valid": "valid_transactions.jsonl",
     "test": "test_transactions.jsonl",
@@ -60,7 +60,7 @@ def load_transactions(raw_dir: Path, split: str) -> pd.DataFrame:
     """One row per transaction, `timestamp` as tz-aware UTC, `mcc` as a string."""
     _check_split(split, SPLITS)
     df = pd.read_json(
-        Path(raw_dir) / _TRANSACTION_FILES[split],
+        Path(raw_dir) / TRANSACTION_FILES[split],
         lines=True,
         dtype={"mcc": str},
         convert_dates=False,

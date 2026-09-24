@@ -216,3 +216,50 @@ def test_fetch_data_fails_loudly_on_a_bad_timestamp(project, tmp_path, capsys, b
     assert refetch_with(project, tmp_path, "unlabeled_pretrain_transactions.jsonl", edit) == 1
     err = capsys.readouterr().err
     assert "unlabeled" in err and "timestamp" in err
+
+
+# --- streams ------------------------------------------------------------------
+
+
+def family_summary(out):
+    rows = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if parts and parts[0] in LABELS:
+            rows[parts[0]] = {parts[i]: int(parts[i + 1]) for i in range(1, len(parts) - 1, 2)}
+    return rows
+
+
+def test_streams_prints_a_per_family_summary_of_the_split(fetched, capsys):
+    # train fixture: C000001 gym, C000002 cloud, C000007 insurance (4 monthly payments each);
+    # coffee-shop and grocery payments never form streams.
+    capsys.readouterr()
+    assert fetched.run("streams", "--split", "train") == 0
+    out = capsys.readouterr().out
+    summary = family_summary(out)
+    assert sorted(summary) == [label for label in LABELS if label != "none"]
+    expected = {"cloud", "gym", "insurance"}
+    for family, counts in summary.items():
+        n = 1 if family in expected else 0
+        assert counts == {"streams": n, "active": n, "clients": n}, family
+    assert "6 Clients" in out and "3 Recurring Streams" in out
+
+
+def test_streams_table_is_cached_per_split(fetched, capsys):
+    cache = fetched.root / "artifacts" / "streams"
+    assert fetched.run("streams", "--split", "train") == 0
+    assert fetched.run("streams", "--split", "valid") == 0
+    files = sorted(cache.iterdir())
+    assert [f.name.split("-")[0] for f in files] == ["train", "valid"]
+    stamps = {f: f.stat().st_mtime_ns for f in files}
+    capsys.readouterr()
+
+    assert fetched.run("streams", "--split", "train") == 0
+    assert "cached" in capsys.readouterr().out
+    assert {f: f.stat().st_mtime_ns for f in sorted(cache.iterdir())} == stamps
+
+    # a changed raw file invalidates the cache instead of serving a stale table
+    raw = fetched.raw / "train_transactions.jsonl"
+    raw.write_text("\n".join(line for line in raw.read_text().splitlines() if "7997" not in line) + "\n")
+    assert fetched.run("streams", "--split", "train") == 0
+    assert family_summary(capsys.readouterr().out)["gym"]["streams"] == 0
