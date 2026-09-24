@@ -3,7 +3,8 @@
 Only outgoing card payments before the Cutoff are candidates. Each candidate gets
 Merchant Family evidence from its description and MCC:
 
-- a *family keyword* ("gym", "saas", "audio", ...) names one family outright, whatever the MCC;
+- a *family keyword* ("gym", "saas", "audio", ...) names one family. On that family's home MCC it
+  starts a stream; on any other MCC it only joins an existing stream of the family, like a filler;
 - an *ambiguous* description ("premium plan", "digital plus", "monthly plan") names a set
   of families, and the MCCs of its amount cluster pick one;
 - a *Filler Description* ("member plan", "subscription charge", ...) names none. It never
@@ -64,6 +65,7 @@ _AMBIGUOUS = (
     ({"premium"}, frozenset({"software", MUSIC_OR_STREAMING})),
     ({"digital", "plus"}, frozenset({"mobile", MUSIC_OR_STREAMING})),
     ({"monthly", "plan"}, frozenset({"mobile"})),
+    ({"service", "plan"}, frozenset({"cloud"})),  # last: "service" is also a noise suffix
 )
 
 COLUMNS = [
@@ -108,11 +110,9 @@ def _evidence(description: str, mcc: str) -> tuple[str, frozenset[str], str | No
     if not words or words & _SHOP_WORDS or words & _DECOY_WORDS:
         return "drop", frozenset(), None
     hint = "music" if words & _MUSIC_HINTS else "streaming" if words & _STREAMING_HINTS else None
-    if {"service", "plan"} <= words:
-        return "family", frozenset({"cloud"}), None
     named = frozenset(g for g, keys in _FAMILY_WORDS.items() if words & keys)
     if len(named) == 1:
-        return "family", named, hint
+        return ("family" if HOME_MCC.get(mcc) in named else "filler"), named, hint
     if len(named) > 1:
         return "filler", named, None
     for required, families in _AMBIGUOUS:

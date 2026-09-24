@@ -307,3 +307,41 @@ def test_many_clients_and_empty_input():
     assert sorted(streams.groupby("client_id").size().items()) == [("C1", 2), ("C2", 3), ("C3", 2)]
     empty = detect_streams(frame(_client_histories()).iloc[:0])
     assert empty.empty and list(empty.columns) == list(streams.columns)
+
+
+# --- noise suffixes and off-home-MCC keywords -----------------------------------
+
+
+def test_a_service_noise_suffix_does_not_move_a_payment_out_of_its_stream():
+    rows = series("C1", "premium plan", "5812", 18, "2025-06-05", 4)
+    rows += series("C1", "premium plan service", "5812", 18, "2025-10-03", 3)
+    rows += series("C2", "cover plan", "6300", 109, "2025-06-05", 5)
+    rows += series("C2", "cover plan service", "6300", 109, "2025-11-02", 2)
+    rows += series("C3", "monthly plan service", "4814", 47, "2025-07-05", 6)
+    streams = detect_streams(frame(rows))
+    assert (one(streams, "C1").family, one(streams, "C1").n_payments) == ("streaming", 7)
+    assert one(streams, "C1").active
+    assert (one(streams, "C2").family, one(streams, "C2").n_payments) == ("insurance", 7)
+    assert (one(streams, "C3").family, one(streams, "C3").n_payments) == ("mobile", 6)
+
+
+def test_service_plan_on_the_cloud_mcc_is_a_cloud_stream():
+    s = one(detect_streams(frame(series("C1", "service plan", "5732", 6.8, "2025-07-05", 6))))
+    assert (s.family, s.n_payments) == ("cloud", 6)
+
+
+def test_family_keywords_on_a_foreign_mcc_never_start_a_stream():
+    rows = [
+        tx("C1", "2025-08-03", 27.8, "cloud access", "5411"),
+        tx("C1", "2025-09-14", 31.0, "cloud access", "4814"),
+        tx("C1", "2025-10-01", 55.0, "gym membership", "5812"),
+        tx("C1", "2025-11-20", 12.0, "audio pass", "5734"),
+    ]
+    assert detect_streams(frame(rows)).empty
+
+
+def test_a_family_keyword_payment_on_a_foreign_mcc_still_joins_its_family_stream():
+    rows = series("C1", "cloud backup", "5732", 6.8, "2025-07-05", 6)
+    rows += [tx("C1", "2025-12-20", 6.8, "cloud backup", "5411"), tx("C1", "2025-08-20", 29.0, "cloud backup", "5812")]
+    s = one(detect_streams(frame(rows)))
+    assert (s.family, s.n_payments) == ("cloud", 7)
