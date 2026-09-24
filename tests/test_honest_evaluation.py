@@ -145,12 +145,14 @@ class HoldoutPeeker(models.PriorModel):
     name = "peeker"
 
     def predict_proba(self, transactions, clients):
-        data.load_labels(self.raw, "holdout")
+        data.load_labels(self.raw, self.source)
         return super().predict_proba(transactions, clients)
 
 
-def test_reading_holdout_labels_outside_checkpoint_fails_loudly(fetched, monkeypatch, capsys):
-    HoldoutPeeker.raw = fetched.raw
+@pytest.mark.parametrize("source", ["holdout", "valid"])
+def test_reading_holdout_labels_outside_checkpoint_fails_loudly(fetched, monkeypatch, capsys, source):
+    monkeypatch.setattr(HoldoutPeeker, "raw", fetched.raw, raising=False)
+    monkeypatch.setattr(HoldoutPeeker, "source", source, raising=False)
     monkeypatch.setitem(models.MODELS, "peeker", HoldoutPeeker)
     assert fetched.run("train", "--model", "peeker") == 0
     assert fetched.run("evaluate", "--model", "peeker") != 0
