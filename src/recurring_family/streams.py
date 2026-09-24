@@ -173,14 +173,9 @@ def detect_streams(
     params: StreamParams = StreamParams(),
 ) -> pd.DataFrame:
     """One row per Recurring Stream, for every Client in `transactions` (columns: `COLUMNS`)."""
-    tx = transactions[transactions["timestamp"] < cutoff]
-    payments = tx[(tx["type"] == "card_payment") & (tx["direction"] == "out")]
-    refunds = tx[(tx["type"] == "refund") & (tx["direction"] == "in")]
-
     rows = []
-    for client, group in payments.groupby("client_id", sort=True):
-        client_refunds = refunds[refunds["client_id"] == client]
-        rows.extend(_client_streams(str(client), group, client_refunds, cutoff, params))
+    for _, _, client_rows, _ in _detect_per_client(transactions, cutoff, params):
+        rows.extend(client_rows)
     table = pd.DataFrame(rows, columns=COLUMNS)
     return table.astype(
         {
@@ -203,6 +198,18 @@ def detect_streams(
             "family_description_share": "float64",
         }
     )
+
+
+def _detect_per_client(transactions, cutoff, params):
+    """Per Client with a payment before `cutoff`: (client, payments, stream rows, membership), where
+    membership gives each payment's `stream_id`, or -1 for a payment in no stream."""
+    tx = transactions[transactions["timestamp"] < cutoff]
+    payments = tx[(tx["type"] == "card_payment") & (tx["direction"] == "out")]
+    refunds = tx[(tx["type"] == "refund") & (tx["direction"] == "in")]
+    for client, group in payments.groupby("client_id", sort=True):
+        client_refunds = refunds[refunds["client_id"] == client]
+        rows, membership = _client_streams(str(client), group, client_refunds, cutoff, params)
+        yield str(client), group, rows, membership
 
 
 def _client_streams(client, payments, refunds, cutoff, params):
@@ -317,11 +324,13 @@ def _client_streams(client, payments, refunds, cutoff, params):
         row["mcc"] = _most_common(mcc[members])
         row["description"] = _most_common(descriptions[members])
         row["family_description_share"] = float(specific[members].mean())
-        out.append(row)
-    out.sort(key=lambda r: (r["family"], r["median_amount"], r["first_payment"]))
-    for n, r in enumerate(out):
+        out.append((row, s))
+    out.sort(key=lambda rs: (rs[0]["family"], rs[0]["median_amount"], rs[0]["first_payment"]))
+    membership = np.full(len(stream_of), -1)
+    for n, (r, s) in enumerate(out):
         r["stream_id"] = n
-    return out
+        membership[stream_of == s] = n
+    return [r for r, _ in out], membership
 
 
 def _most_common(values) -> str:
