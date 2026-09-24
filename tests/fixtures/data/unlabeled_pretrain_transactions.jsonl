@@ -1,0 +1,5 @@
+{"amount": 13.5, "client_id": "U000001", "currency": "eur", "description": "audio streaming", "direction": "out", "fee": 0.0, "mcc": "5812", "timestamp": "2025-09-05T10:00:00Z", "type": "card_payment"}
+{"amount": 13.5, "client_id": "U000001", "currency": "eur", "description": "audio streaming", "direction": "out", "fee": 0.0, "mcc": "5812", "timestamp": "2025-10-05T10:00:00Z", "type": "card_payment"}
+{"amount": 13.5, "client_id": "U000001", "currency": "eur", "description": "audio streaming", "direction": "out", "fee": 0.0, "mcc": "5812", "timestamp": "2025-11-05T10:00:00Z", "type": "card_payment"}
+{"amount": 13.5, "client_id": "U000001", "currency": "eur", "description": "audio streaming", "direction": "out", "fee": 0.0, "mcc": "5812", "timestamp": "2025-12-05T10:00:00Z", "type": "card_payment"}
+{"amount": 42.1, "client_id": "U000001", "currency": "eur", "description": "neighborhood market", "direction": "out", "fee": 0.0, "mcc": "5411", "timestamp": "2025-10-11T08:00:00Z", "type": "card_payment"}
