@@ -1,4 +1,4 @@
-"""The one CLI: fetch-data, split, streams, train, cv, evaluate, submit."""
+"""The one CLI: fetch-data, split, streams, train, cv, features, evaluate, submit."""
 
 import argparse
 import dataclasses
@@ -209,6 +209,29 @@ def cmd_cv(args, paths: Paths) -> int:
     return 0
 
 
+def cmd_features(args, paths: Paths) -> int:
+    model = _load_model(paths, "lgbm")
+    transactions = data.load_transactions(paths.raw, args.split)
+    clients = pd.Index(sorted(transactions["client_id"].astype(str).unique()), name="client_id")
+    rows = model.features(transactions, clients)
+    # the Clients whose labels the model was fitted on get the out-of-fold rows it trained on:
+    # encoded with the fitted description rates, their rows would carry their own labels
+    meta = paths.model_meta("lgbm")
+    with_selection = "selection" in (json.loads(meta.read_text())["fitted_on"] if meta.exists() else ["train"])
+    if args.split == "train" or (args.split == "valid" and with_selection):
+        with data.training_run(with_selection=with_selection):
+            train_tx, train_labels = _training_data(paths, with_selection)
+        trained = clients.intersection(train_labels.index)
+        if len(trained):
+            out_of_fold = model.training_features(train_tx, train_labels)
+            rows = pd.concat([rows.drop(trained), out_of_fold.loc[trained]]).reindex(clients)
+    out = Path(args.out) if args.out else paths.artifacts / "features" / f"{args.split}.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    rows.to_csv(out, index_label="client_id")
+    print(f"features: {args.split} ({len(rows)} Clients, {rows.shape[1]} features) -> {out}")
+    return 0
+
+
 def _best_predictions(paths: Paths, best: dict, clients: pd.Index) -> pd.Series:
     """The previous best run's per-Client predictions, which the paired bootstrap needs for
     exactly these Clients. Never fall back to a weaker run: that would misstate the verdict."""
@@ -367,6 +390,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--folds", type=int, default=CV_FOLDS)
     p.add_argument("--out", metavar="CSV", help="default: <root>/artifacts/oof/<model>.csv")
     p.set_defaults(func=cmd_cv)
+
+    p = sub.add_parser(
+        "features", parents=[common], help="write the E2 feature rows the trained lgbm model scores for a split"
+    )
+    p.add_argument("--split", choices=data.SPLITS, default="train")
+    p.add_argument("--out", metavar="CSV", help="default: <root>/artifacts/features/<split>.csv")
+    p.set_defaults(func=cmd_features)
 
     p = sub.add_parser("evaluate", parents=[common], help="score a trained model and log the run")
     p.add_argument("--model", choices=sorted(MODELS), required=True)
