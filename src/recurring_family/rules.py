@@ -8,6 +8,9 @@ learned from the labels.
 The optional `none`-gate (the milestone-2 rule) also predicts `none` for a Client whose longest
 surviving stream has at most `none_gate` payments: short streams are mostly Clients who churn.
 It is off unless set; `DEFAULT_NONE_GATE` is the threshold the milestone-2 submission used.
+
+The rule runs at the real Cutoff unless given another one: at a Shifted Cutoff it sees only the
+transactions before it, and its Horizon starts there (the Pseudo-Label fidelity check).
 """
 
 import dataclasses
@@ -34,7 +37,11 @@ class RulesModel:
     name = "rules"
 
     def __init__(
-        self, ordering: str = DEFAULT_ORDERING, params: StreamParams = StreamParams(), none_gate: int | None = None
+        self,
+        ordering: str = DEFAULT_ORDERING,
+        params: StreamParams = StreamParams(),
+        none_gate: int | None = None,
+        cutoff: pd.Timestamp = CUTOFF,
     ):
         if ordering not in ORDERINGS:
             raise ValueError(f"unknown ordering {ordering!r}; expected one of {', '.join(ORDERINGS)}")
@@ -43,6 +50,7 @@ class RulesModel:
         self.ordering = ordering
         self.params = params
         self.none_gate = none_gate
+        self.cutoff = pd.Timestamp(cutoff)
 
     @property
     def variant(self) -> str:
@@ -59,16 +67,27 @@ class RulesModel:
 
     def surviving_streams(self, transactions: pd.DataFrame, clients: pd.Index) -> pd.DataFrame:
         """The Clients' Active Streams due within the Horizon, each Client's in ordering-rule order."""
-        streams = detect_streams(transactions[transactions["client_id"].isin(set(clients))], CUTOFF, self.params)
-        streams = streams[streams["active"] & (streams["next_payment"] <= CUTOFF + HORIZON)]
+        return self._surviving(self.streams(transactions, clients))
+
+    def streams(self, transactions: pd.DataFrame, clients: pd.Index) -> pd.DataFrame:
+        """The Clients' Recurring Streams at the rule's Cutoff, from the transactions before it only."""
+        return detect_streams(transactions[transactions["client_id"].isin(set(clients))], self.cutoff, self.params)
+
+    def _surviving(self, streams: pd.DataFrame) -> pd.DataFrame:
+        streams = streams[streams["active"] & (streams["next_payment"] <= self.cutoff + HORIZON)]
         column, ascending = ORDERINGS[self.ordering]
         return streams.sort_values(
             ["client_id", column, "family", "stream_id"], ascending=[True, ascending, True, True], kind="stable"
         )
 
     def predict_proba(self, transactions: pd.DataFrame, clients: pd.Index) -> pd.DataFrame:
+        return self.proba_from_streams(self.streams(transactions, clients), clients)
+
+    def proba_from_streams(self, streams: pd.DataFrame, clients: pd.Index) -> pd.DataFrame:
+        """`predict_proba` from a stream table already detected at the rule's Cutoff with its
+        parameters (e.g. a cached one): the Clients missing from it get `none`."""
         index = pd.Index(clients, name="client_id")
-        surviving = self.surviving_streams(transactions, index)
+        surviving = self._surviving(streams[streams["client_id"].isin(set(index))])
         if self.none_gate is not None:
             longest = surviving.groupby("client_id")["n_payments"].transform("max")
             surviving = surviving[longest > self.none_gate]
@@ -101,6 +120,7 @@ class RulesModel:
             "ordering": self.ordering,
             "none_gate": self.none_gate,
             "params": dataclasses.asdict(self.params),
+            "cutoff": self.cutoff.isoformat(),
         }
         Path(path).write_text(json.dumps(payload, indent=2))
 
@@ -108,5 +128,6 @@ class RulesModel:
     def load(cls, path: Path) -> "RulesModel":
         payload = json.loads(Path(path).read_text())
         params = {k: tuple(v) if isinstance(v, list) else v for k, v in payload["params"].items()}
-        # models saved before the gate existed have no threshold: the gate is off
-        return cls(payload["ordering"], StreamParams(**params), payload.get("none_gate"))
+        # models saved before the gate existed have no threshold: the gate is off; nor a Cutoff: the real one
+        cutoff = pd.Timestamp(payload["cutoff"]) if "cutoff" in payload else CUTOFF
+        return cls(payload["ordering"], StreamParams(**params), payload.get("none_gate"), cutoff)
