@@ -1,4 +1,4 @@
-"""The one CLI: fetch-data, split, streams, train, cv, features, evaluate, submit."""
+"""The one CLI: fetch-data, split, streams, pseudo-labels, train, cv, features, evaluate, submit."""
 
 import argparse
 import dataclasses
@@ -12,13 +12,16 @@ import pandas as pd
 
 from . import data
 from . import decision as decision_layer
-from .config import LABEL_COLUMN, LABELS, MERCHANT_FAMILIES
+from .config import CUTOFF, HORIZON, LABEL_COLUMN, LABELS, MERCHANT_FAMILIES, SHIFTED_CUTOFF
 from .cross_validation import CV_FOLDS, out_of_fold_proba
 from .evaluation import append_log, log_row, paired_bootstrap, previous_best, score
 from .fetch import fetch_data
 from .models import MODELS, predict_labels
+from .pseudo import (
+    FIDELITY_CANDIDATES, NONE_SHARE_TOLERANCE, PSEUDO_MIN_PAYMENTS, RULE_F1_TOLERANCE, fidelity_check, milestone2_rule,
+)
 from .rules import DEFAULT_NONE_GATE, DEFAULT_ORDERING, ORDERINGS
-from .streams import StreamParams, cached_streams
+from .streams import StreamParams, cached_pseudo_labels, cached_streams
 from .submission import InvalidSubmission, read_submission, validate, write_submission
 
 DEFAULT_ZIP = Path("hackathons") / "2026" / "data" / "dataset.zip"
@@ -37,6 +40,13 @@ class Paths:
     @property
     def streams(self) -> Path:
         return self.artifacts / "streams"
+
+    @property
+    def pseudo_labels(self) -> Path:
+        return self.artifacts / "pseudo_labels"
+
+    def pseudo_label_table(self, split: str, cutoff: pd.Timestamp, min_payments: int) -> Path:
+        return self.pseudo_labels / f"{split}-{cutoff:%Y-%m-%d}-min{min_payments}.csv"
 
     def model(self, name: str) -> Path:
         return self.artifacts / f"{name}.json"
@@ -131,6 +141,138 @@ def payment_count(text: str) -> int:
     if n < 1:
         raise argparse.ArgumentTypeError(f"expected a positive number of payments; got {text!r}")
     return n
+
+
+def utc_date(text: str) -> pd.Timestamp:
+    """A calendar date (YYYY-MM-DD), taken as midnight UTC."""
+    try:
+        return pd.Timestamp(pd.Timestamp(text).date(), tz="UTC")
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a date YYYY-MM-DD; got {text!r}") from None
+
+
+def payment_counts(text: str) -> tuple[int, ...]:
+    """Comma-separated minimum-payments settings, e.g. 2,3,4."""
+    try:
+        values = tuple(sorted({int(v) for v in text.split(",")}))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected comma-separated numbers of payments; got {text!r}") from None
+    if any(v < 2 for v in values):
+        raise argparse.ArgumentTypeError(f"every minimum must be at least 2 payments; got {text!r}")
+    return values
+
+
+def _settings_text(values: tuple[int, ...]) -> str:
+    """2-10 for a run of consecutive settings, else 2,5."""
+    if len(values) > 1 and values == tuple(range(values[0], values[-1] + 1)):
+        return f"{values[0]}-{values[-1]}"
+    return ",".join(str(v) for v in values)
+
+
+def _pseudo_label_tables(args, paths: Paths, params: StreamParams, settings: tuple[int, ...]):
+    """{min_payments: (labels, cached)} for the split, made without reading any label file."""
+    try:
+        with data.pseudo_labelling():
+            return cached_pseudo_labels(
+                paths.raw, args.split, paths.pseudo_labels / "cache", settings, cutoff=args.cutoff, params=params
+            )
+    except data.DataError:
+        raise
+    except ValueError as e:  # a Shifted Cutoff whose Horizon is not fully observed
+        raise data.DataError(str(e)) from None
+
+
+def cmd_pseudo_labels(args, paths: Paths) -> int:
+    params = dataclasses.replace(StreamParams(), **dict(args.param))
+    if args.fidelity and args.split != "train":
+        raise data.DataError("the fidelity check compares with real labels, so it runs on --split train only")
+    candidates = args.candidates or FIDELITY_CANDIDATES
+    settings = candidates if args.fidelity else (args.min_payments or PSEUDO_MIN_PAYMENTS,)
+    tables = _pseudo_label_tables(args, paths, params, settings)
+    fidelity = _fidelity(paths, args.cutoff, tables) if args.fidelity else None
+    min_payments = fidelity.chosen.min_payments if fidelity else settings[0]
+    labels, cached = tables[min_payments]
+
+    out = Path(args.out) if args.out else paths.pseudo_label_table(args.split, args.cutoff, min_payments)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {"client_id": labels.index, "cutoff_date": f"{args.cutoff:%Y-%m-%d}", LABEL_COLUMN: labels.to_numpy()}
+    ).to_csv(out, index=False)
+    print(
+        f"pseudo-labels: {args.split} at Shifted Cutoff {args.cutoff:%Y-%m-%d}, min_payments {min_payments} "
+        f"({len(labels)} Clients) [{'cached' if cached else 'labelled'}] -> {out}"
+    )
+    counts = labels.value_counts()
+    for label in LABELS:
+        n = int(counts.get(label, 0))
+        print(f"  {label:<10} {n:>6} {n / max(len(labels), 1):.4f}")
+    if fidelity is not None:
+        _report_fidelity(args, paths, candidates, fidelity)
+    return 0
+
+
+def _rule_predictions(paths: Paths, cutoff: pd.Timestamp, clients: pd.Index) -> pd.Series:
+    """The milestone-2 rule at `cutoff`, from the (cached) train stream table detected at that Cutoff,
+    which is built from the transactions before it only."""
+    rule = milestone2_rule(cutoff)
+    streams, _ = cached_streams(paths.raw, "train", paths.streams, cutoff=cutoff, params=rule.params)
+    return predict_labels(rule.proba_from_streams(streams, clients))
+
+
+def _fidelity(paths: Paths, cutoff: pd.Timestamp, tables):
+    """The fidelity check on train: the only label file it reads is train's."""
+    real = data.load_labels(paths.raw, "train").set_index("client_id")[LABEL_COLUMN]
+    clients = pd.Index(real.index, name="client_id")
+    return fidelity_check(
+        real,
+        _rule_predictions(paths, CUTOFF, clients),
+        {m: labels for m, (labels, _) in tables.items()},
+        _rule_predictions(paths, cutoff, clients),
+    )
+
+
+def _report_fidelity(args, paths: Paths, candidates: tuple[int, ...], fidelity) -> None:
+    rule = milestone2_rule()
+    rule_name = rule.name + rule.variant
+    chosen = fidelity.chosen
+    verdict = "PASS" if fidelity.passed else "FAIL"
+    print(
+        f"fidelity check: train at Shifted Cutoff {args.cutoff:%Y-%m-%d} against the real Cutoff, "
+        f"rule {rule_name}"
+    )
+    print("  min_payments  none share  rule macro-F1  none gap  rule gap")
+    for s in fidelity.settings:
+        print(
+            f"  {s.min_payments:<12}  {s.none_share:.4f}      {s.rule_macro_f1:.4f}         "
+            f"{s.none_gap:+.4f}   {s.rule_gap:+.4f}  {'pass' if s.passed else 'fail'}"
+        )
+    none_text = (
+        f"none share {chosen.none_share:.4f} vs real {fidelity.real_none_share:.4f}: "
+        f"gap {chosen.none_gap:+.4f}, tolerance {NONE_SHARE_TOLERANCE:.2f}"
+    )
+    rule_text = (
+        f"rule macro-F1 {chosen.rule_macro_f1:.4f} vs real {fidelity.real_rule_macro_f1:.4f}: "
+        f"gap {chosen.rule_gap:+.4f}, tolerance {RULE_F1_TOLERANCE:.2f}"
+    )
+    print(f"  chosen min_payments {chosen.min_payments} (smallest worse gap relative to its tolerance)")
+    print(f"  {none_text}")
+    print(f"  {rule_text}")
+    print(f"  {verdict}")
+
+    overrides = ", ".join(f"{k}={v}" for k, v in args.param) or "defaults"
+    change = (
+        f"Pseudo-Label fidelity check: Shifted Cutoff {args.cutoff:%Y-%m-%d}, Horizon {HORIZON.days} days, "
+        f"min_payments {chosen.min_payments} (chosen from {_settings_text(candidates)}), "
+        f"labeller stream params {overrides}"
+    )
+    conclusion = f"{none_text}; {rule_text}; {verdict}"
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:6]
+    row = log_row(
+        chosen.rule_scores, change=change, model=rule_name, split="train", conclusion=conclusion,
+        row_type="fidelity", run_id=run_id,
+    )
+    row.update({"delta": f"{chosen.rule_gap:.4f}", "verdict": verdict.lower()})
+    append_log(paths.log, row)
 
 
 def cmd_streams(args, paths: Paths) -> int:
@@ -377,6 +519,35 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.set_defaults(func=cmd_streams)
 
+    p = sub.add_parser(
+        "pseudo-labels", parents=[common],
+        help="write a split's Pseudo-Labels at a Shifted Cutoff (reads no label file); --fidelity checks them on train",
+    )
+    p.add_argument("--split", choices=data.SPLITS, default="train")
+    p.add_argument(
+        "--cutoff", type=utc_date, default=SHIFTED_CUTOFF, metavar="YYYY-MM-DD",
+        help=f"the Shifted Cutoff (default {SHIFTED_CUTOFF:%Y-%m-%d}, the latest whose Horizon is fully observed)",
+    )
+    p.add_argument(
+        "--min-payments", type=payment_count, metavar="N",
+        help="payments a Recurring Stream needs for its Horizon payment to count "
+        f"(default {PSEUDO_MIN_PAYMENTS}, the fidelity check's choice)",
+    )
+    p.add_argument(
+        "--param", type=stream_param, action="append", default=[], metavar="NAME=VALUE",
+        help="override one stream detection parameter of the labeller (repeatable)",
+    )
+    p.add_argument("--out", metavar="CSV", help="default: <root>/artifacts/pseudo_labels/<split>-<cutoff>-min<N>.csv")
+    p.add_argument(
+        "--fidelity", action="store_true",
+        help="train only: compare the Pseudo-Label task with the real one, choose min_payments, log the result",
+    )
+    p.add_argument(
+        "--candidates", type=payment_counts, metavar="N,N,...",
+        help=f"--fidelity: the min_payments settings to choose among (default {_settings_text(FIDELITY_CANDIDATES)})",
+    )
+    p.set_defaults(func=cmd_pseudo_labels)
+
     p = sub.add_parser("train", parents=[common], help="fit a model on the train Clients")
     p.add_argument("--model", choices=sorted(MODELS), required=True)
     p.add_argument("--with-selection", action="store_true", help="also fit on the valid selection set (submission refit)")
@@ -450,6 +621,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "train" and args.model != "rules" and (args.ordering or args.param or args.none_gate):
         parser.error("--ordering, --param and --none-gate apply to --model rules only")
+    if args.command == "pseudo-labels":
+        if args.fidelity and args.min_payments is not None:
+            parser.error("--fidelity chooses min_payments itself; give the settings to choose among with --candidates")
+        if not args.fidelity and args.candidates is not None:
+            parser.error("--candidates applies to --fidelity only")
     paths = Paths(Path(args.root))
     try:
         return args.func(args, paths)

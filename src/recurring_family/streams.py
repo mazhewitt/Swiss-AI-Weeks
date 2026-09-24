@@ -437,6 +437,17 @@ def pseudo_labels(
     a Filler Description that joins a stream takes that stream's family. A Horizon that ends after
     the last observed day is refused: its Pseudo-Labels would come from a partly observed Horizon.
     """
+    return pseudo_label_sweep(transactions, (min_payments,), cutoff, horizon, params)[min_payments]
+
+
+def pseudo_label_sweep(
+    transactions: pd.DataFrame,
+    min_payments: tuple[int, ...],
+    cutoff: pd.Timestamp = SHIFTED_CUTOFF,
+    horizon: pd.Timedelta = HORIZON,
+    params: StreamParams = StreamParams(),
+) -> dict[int, pd.Series]:
+    """`pseudo_labels` for several minimum-payments settings from one stream detection pass."""
     end = cutoff + horizon
     if end > HISTORY_END:
         last_day = (HISTORY_END - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
@@ -445,21 +456,24 @@ def pseudo_labels(
             f"observed day ({last_day}), so its Pseudo-Labels would come from a partly observed Horizon; "
             f"the latest Shifted Cutoff is {HISTORY_END - horizon:%Y-%m-%d}"
         )
-    if min_payments < 2:
-        raise ValueError(f"min_payments must be at least 2 (a Recurring Stream repeats), got {min_payments}")
+    for m in min_payments:
+        if m < 2:
+            raise ValueError(f"min_payments must be at least 2 (a Recurring Stream repeats), got {m}")
 
     clients = pd.Index(sorted(transactions["client_id"].astype(str).unique()), dtype="string", name="client_id")
-    labels = pd.Series(NONE_LABEL, index=clients, name=LABEL_COLUMN, dtype="string")
+    labels = {m: pd.Series(NONE_LABEL, index=clients, name=LABEL_COLUMN, dtype="string") for m in min_payments}
     for client, payments, rows, membership in _detect_per_client(transactions, HISTORY_END, params):
         family = np.array([r["family"] for r in rows] + [None], dtype=object)  # [-1] -> no stream
         counts = np.array([r["n_payments"] for r in rows] + [0])
         times = pd.DatetimeIndex(payments["timestamp"])
-        counted = (times >= cutoff) & (times < end) & (counts[membership] >= min_payments)
-        if counted.any():
-            # the earliest counted payment; simultaneous payments of two families go to the first by name
-            idx = np.flatnonzero(counted)
-            first = idx[np.lexsort((family[membership[idx]].astype(str), times.asi8[idx]))[0]]
-            labels[client] = family[membership[first]]
+        in_horizon = (times >= cutoff) & (times < end)
+        for m, client_labels in labels.items():
+            counted = in_horizon & (counts[membership] >= m)
+            if counted.any():
+                # the earliest counted payment; simultaneous payments of two families go to the first by name
+                idx = np.flatnonzero(counted)
+                first = idx[np.lexsort((family[membership[idx]].astype(str), times.asi8[idx]))[0]]
+                client_labels[client] = family[membership[first]]
     return labels
 
 
@@ -481,19 +495,56 @@ def cached_streams(
     stale table. Tables for different parameters coexist, so a sweep does not evict on every
     change; tables built from other sources can never be served again and are evicted.
     """
-    source = Path(raw_dir) / data.TRANSACTION_FILES[split]
-    stat = source.stat()
-    source_key = _digest((stat.st_size, stat.st_mtime_ns, _detector_version(), _canonical(_family_table())))
+    source_key = _source_key(raw_dir, split)
     path = Path(cache_dir) / f"{split}-{source_key}-{_digest((str(cutoff), params))}.pkl"
     if path.exists():
         return pd.read_pickle(path), True
     table = detect_streams(data.load_transactions(raw_dir, split), cutoff, params)
+    _store(table, path, split, source_key)
+    return table, False
+
+
+def cached_pseudo_labels(
+    raw_dir: Path,
+    split: str,
+    cache_dir: Path,
+    min_payments: tuple[int, ...],
+    cutoff: pd.Timestamp = SHIFTED_CUTOFF,
+    params: StreamParams = StreamParams(),
+    horizon: pd.Timedelta = HORIZON,
+) -> dict[int, tuple[pd.Series, bool]]:
+    """The split's Pseudo-Labels at `cutoff` for each minimum-payments setting, and whether each came
+    from the cache. Keyed like `cached_streams`, plus the Shifted Cutoff, the Horizon and the labeller
+    parameters; the settings not yet cached are labelled together in one stream detection pass.
+    Reads transactions only, never a label file."""
+    source_key = _source_key(raw_dir, split)
+    paths = {
+        m: Path(cache_dir) / f"{split}-{source_key}-{_digest((str(cutoff), str(horizon), m, params))}.pkl"
+        for m in min_payments
+    }
+    result = {m: (pd.read_pickle(path), True) for m, path in paths.items() if path.exists()}
+    missing = tuple(m for m in paths if m not in result)
+    if missing:
+        labelled = pseudo_label_sweep(data.load_transactions(raw_dir, split), missing, cutoff, horizon, params)
+        for m, labels in labelled.items():
+            _store(labels, paths[m], split, source_key)
+            result[m] = (labels, False)
+    return {m: result[m] for m in min_payments}
+
+
+def _source_key(raw_dir: Path, split: str) -> str:
+    """The raw transactions file (size and mtime), the detector code and the family table."""
+    stat = (Path(raw_dir) / data.TRANSACTION_FILES[split]).stat()
+    return _digest((stat.st_size, stat.st_mtime_ns, _detector_version(), _canonical(_family_table())))
+
+
+def _store(obj, path: Path, split: str, source_key: str) -> None:
+    """Pickle `obj` at `path`, evicting the split's entries built from any other source."""
     path.parent.mkdir(parents=True, exist_ok=True)
     for stale in path.parent.glob(f"{split}-*.pkl"):
         if not stale.name.startswith(f"{split}-{source_key}-"):
             stale.unlink()
-    table.to_pickle(path)
-    return table, False
+    obj.to_pickle(path)
 
 
 # The detector's code: this module plus the loaders and constants it reads.

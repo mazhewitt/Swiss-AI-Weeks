@@ -67,7 +67,7 @@ class LabelLeak(DataError):
 
 @dataclass(frozen=True)
 class _LabelPolicy:
-    stage: str = "outside"  # outside | training | predicting | scoring
+    stage: str = "outside"  # outside | training | predicting | scoring | pseudo-labelling
     selection: bool = False
     holdout: bool = False
 
@@ -95,6 +95,12 @@ def predicting():
     return _policy(_LabelPolicy(stage="predicting", selection=False, holdout=False))
 
 
+def pseudo_labelling():
+    """While Pseudo-Labels are made no label file may be read, not even train's: they come from
+    transactions only, which is what makes them allowed on valid and test."""
+    return _policy(_LabelPolicy(stage="pseudo-labelling", selection=False, holdout=False))
+
+
 def scoring():
     """Evaluate's scoring step, after predictions are made: the selection set's labels may be read."""
     return _policy(_LabelPolicy(stage="scoring", selection=True, holdout=False))
@@ -106,9 +112,13 @@ def checkpoint():
 
 
 def _guard_label_read(source: str) -> None:
+    policy = _POLICY.get()
+    if policy.stage == "pseudo-labelling":
+        raise LabelLeak(
+            f"Pseudo-Label generation tried to read {source} labels; Pseudo-Labels come from transactions only"
+        )
     if source == "train":
         return
-    policy = _POLICY.get()
     if policy.stage == "training" and (source != "selection" or not policy.selection):
         raise LabelLeak(
             f"a training run tried to read valid labels ({source}); training uses train labels only"
