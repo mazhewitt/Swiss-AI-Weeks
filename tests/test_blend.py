@@ -9,8 +9,8 @@ import pytest
 from recurring_family.blend import BlendModel
 from test_lgbm_pipeline import LABELS, read_rows, separable_split
 from test_ranker import read_proba
-from test_ranker_pseudo_labels import pseudo_histories
-from test_rules_baseline import GATE, GATE_LABELS, all_transactions, write_train
+from test_ranker_pseudo_labels import pooled_project, pseudo_histories
+from test_rules_baseline import GATE, GATE_LABELS, TWO_STREAMS, all_transactions, write_train
 from test_lgbm_pipeline import shop, write_labels, write_transactions
 
 
@@ -168,3 +168,65 @@ def test_options_for_other_models_and_bad_rule_weights_are_refused(fetched, args
     with pytest.raises(SystemExit):
         fetched.run(*args)
     assert not list(fetched.root.glob("artifacts/*.json"))
+
+
+# --- every part's settings reach it (critic round 1) ------------------------------------------
+
+
+@pytest.fixture
+def two_streams(fetched):
+    write_train(fetched, all_transactions(TWO_STREAMS), {"T_GYM": "gym", "T_CLOUD": "cloud"})
+    return fetched
+
+
+def test_ordering_and_stream_parameters_reach_the_blends_rule_and_survive_reloading(two_streams):
+    # T_GYM: gym (4 payments) is due soonest; cloud (8 payments) is the longest stream
+    _, default = train_predictions(two_streams, "blend", "--rule-weight", "1")
+    _, longest = train_predictions(two_streams, "blend", "--rule-weight", "1", "--ordering", "longest")
+    _, strict = train_predictions(two_streams, "blend", "--rule-weight", "1", "--param", "min_payments=5")
+    assert (default["T_GYM"], longest["T_GYM"], strict["T_GYM"]) == ("gym", "cloud", "cloud")
+    model = BlendModel.load(two_streams.root / "artifacts" / "blend.json")
+    assert model.rules.params.min_payments == 5
+
+
+def test_cv_passes_ordering_and_stream_parameters_to_the_blends_rule(fetched):
+    # the gate Clients join so that 2 stratified folds are possible
+    write_train(
+        fetched, all_transactions({**TWO_STREAMS, **GATE}), {"T_GYM": "gym", "T_CLOUD": "cloud", **GATE_LABELS}
+    )
+    two_streams = fetched
+    outs = {}
+    for name, model, extra in [
+        ("rules", "rules", ()), ("blend", "blend", ("--rule-weight", "1")), ("default", "rules", ()),
+    ]:
+        outs[name] = two_streams.root / f"{name}_oof.csv"
+        settings = () if name == "default" else ("--ordering", "longest", "--param", "min_payments=5")
+        assert two_streams.run("cv", "--model", model, *settings, *extra, "--folds", "2", "--out", str(outs[name])) == 0
+    rules, blend, default = (read_proba(outs[k]) for k in ("rules", "blend", "default"))
+    pd.testing.assert_frame_equal(blend, rules)
+    assert not rules.equals(default)
+
+
+def test_pseudo_label_weight_and_minimum_payments_reach_the_blends_ranker(fetched):
+    pooled_project(fetched)
+    settings = ("--pseudo", "unlabeled", "--pseudo-weight", "2", "--pseudo-min-payments", "3")
+    assert fetched.run("train", "--model", "ranker", *settings) == 0
+    ranker = evaluate_proba(fetched, "ranker", "ranker")
+    assert fetched.run("train", "--model", "ranker", "--pseudo", "unlabeled") == 0
+    default = evaluate_proba(fetched, "ranker", "default")
+    assert fetched.run("train", "--model", "blend", "--rule-weight", "0", *settings) == 0
+    blend = evaluate_proba(fetched, "blend", "blend")
+    np.testing.assert_allclose(blend.to_numpy(), ranker.loc[blend.index].to_numpy(), atol=1e-9)
+    assert not np.allclose(ranker.to_numpy(), default.loc[ranker.index].to_numpy())
+    row = read_rows(fetched.log)[-1]
+    assert (row["pseudo_weight"], row["pseudo_min_payments"]) == ("2", "3")
+
+
+def test_training_a_blend_leaves_the_rules_and_ranker_models_alone(separable):
+    assert separable.run("train", "--model", "rules", "--none-gate") == 0
+    assert separable.run("train", "--model", "ranker") == 0
+    artifacts = separable.root / "artifacts"
+    before = {name: (artifacts / name).read_bytes() for name in ("rules.json", "ranker.json")}
+    assert separable.run("train", "--model", "blend", "--ordering", "longest", "--rule-weight", "0.2") == 0
+    assert {name: (artifacts / name).read_bytes() for name in before} == before
+    assert (artifacts / "blend.rules.json").exists() and (artifacts / "blend.ranker.json").exists()
