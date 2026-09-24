@@ -1,13 +1,23 @@
 """Typed loaders for the challenge files in the raw data area."""
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from .config import LABEL_COLUMN, PREDICTION_COLUMN
 
 SPLITS = ("train", "valid", "test", "unlabeled")
 LABELLED_SPLITS = ("train", "valid")
+# valid is divided once into these two disjoint sets of Clients.
+VALID_SETS = ("selection", "holdout")
+LABEL_SOURCES = (*LABELLED_SPLITS, *VALID_SETS)
+
+HOLDOUT_FRACTION = 0.3
+SPLIT_SEED = 20260101
 
 TRANSACTION_FILES = {
     "train": "train_transactions.jsonl",
@@ -51,6 +61,77 @@ def _parse_utc_timestamps(raw: pd.Series, split: str) -> pd.Series:
     return parsed
 
 
+class LabelLeak(DataError):
+    """Labels were read where the evaluation protocol forbids it."""
+
+
+@dataclass(frozen=True)
+class _LabelPolicy:
+    stage: str = "outside"  # outside | training | predicting | scoring
+    selection: bool = False
+    holdout: bool = False
+
+
+# Outside a scoring step no valid labels may be read at all.
+_POLICY: ContextVar[_LabelPolicy] = ContextVar("label_policy", default=_LabelPolicy())
+
+
+@contextmanager
+def _policy(policy: _LabelPolicy):
+    token = _POLICY.set(policy)
+    try:
+        yield
+    finally:
+        _POLICY.reset(token)
+
+
+def training_run(*, with_selection: bool = False):
+    """Inside a training run valid labels are off limits, except the selection set when refitting."""
+    return _policy(_LabelPolicy(stage="training", selection=with_selection, holdout=False))
+
+
+def predicting():
+    """While a model predicts, no valid labels may be read: it could fake the score it is about to get."""
+    return _policy(_LabelPolicy(stage="predicting", selection=False, holdout=False))
+
+
+def scoring():
+    """Evaluate's scoring step, after predictions are made: the selection set's labels may be read."""
+    return _policy(_LabelPolicy(stage="scoring", selection=True, holdout=False))
+
+
+def checkpoint():
+    """The human-started checkpoint's scoring step: the only place sealed-holdout labels may be read."""
+    return _policy(_LabelPolicy(stage="scoring", selection=True, holdout=True))
+
+
+def _guard_label_read(source: str) -> None:
+    if source == "train":
+        return
+    policy = _POLICY.get()
+    if policy.stage == "training" and (source != "selection" or not policy.selection):
+        raise LabelLeak(
+            f"a training run tried to read valid labels ({source}); training uses train labels only"
+            + ("" if source != "selection" else " (pass --with-selection to refit on train plus the selection set)")
+        )
+    if policy.stage == "predicting":
+        raise LabelLeak(
+            f"reading {source} labels while a model predicts would let it fake its score"
+            + (" and expose the sealed holdout" if source in ("holdout", "valid") else "")
+            + "; evaluate reads the labels it scores against only after the predictions are made"
+        )
+    if source in ("holdout", "valid") and not policy.holdout:
+        raise LabelLeak(
+            f"reading {source} labels would expose the sealed holdout; "
+            "sealed holdout labels are read only in checkpoint mode (evaluate --checkpoint)"
+        )
+    if source == "selection" and not policy.selection:
+        raise LabelLeak(
+            "reading selection labels is allowed only in evaluate's scoring step "
+            "(or a refit with --with-selection)"
+        )
+
+
 def _check_split(split: str, allowed: tuple[str, ...]) -> None:
     if split not in allowed:
         raise ValueError(f"unknown split {split!r}; expected one of {allowed}")
@@ -70,9 +151,7 @@ def load_transactions(raw_dir: Path, split: str) -> pd.DataFrame:
     return df
 
 
-def load_labels(raw_dir: Path, split: str) -> pd.DataFrame:
-    """Columns: client_id, cutoff_date (UTC), target_next_recurring_merchant."""
-    _check_split(split, LABELLED_SPLITS)
+def _read_label_file(raw_dir: Path, split: str) -> pd.DataFrame:
     df = pd.read_csv(
         Path(raw_dir) / f"{split}_labels.csv",
         dtype={"client_id": "string", LABEL_COLUMN: "string"},
@@ -80,6 +159,49 @@ def load_labels(raw_dir: Path, split: str) -> pd.DataFrame:
     )
     df["cutoff_date"] = pd.to_datetime(df["cutoff_date"], utc=True)
     return df
+
+
+def load_labels(raw_dir: Path, split: str) -> pd.DataFrame:
+    """Columns: client_id, cutoff_date (UTC), target_next_recurring_merchant.
+
+    `split` is train, valid (all of it), or one of the valid sets: selection or holdout.
+    Guarded: no valid labels inside a training run (bar the selection set when refitting)
+    or while a model predicts; selection labels only in a scoring step, and holdout labels
+    (hence full valid) only in checkpoint mode's scoring step.
+    """
+    _check_split(split, LABEL_SOURCES)
+    _guard_label_read(split)
+    if split in LABELLED_SPLITS:
+        return _read_label_file(raw_dir, split)
+    df = _read_label_file(raw_dir, "valid")
+    members = valid_split(raw_dir).query("set == @split")["client_id"]
+    return df[df["client_id"].isin(set(members))].reset_index(drop=True)
+
+
+def valid_split(raw_dir: Path) -> pd.DataFrame:
+    """Columns client_id, set: every valid Client in exactly one of selection / holdout.
+
+    Stratified by label with a fixed seed. Within each label the Clients are ordered by
+    ID before shuffling, so the split depends only on the (client, label) pairs, never on
+    file order. The holdout takes round(30%) of valid; per-label quotas use largest
+    remainder so every label gets floor or ceil of its 30% share. Rows keep file order.
+    """
+    df = _read_label_file(raw_dir, "valid")
+    counts = df[LABEL_COLUMN].value_counts().sort_index()
+    exact = counts * HOLDOUT_FRACTION
+    quota = np.floor(exact).astype(int)
+    extra = int(round(len(df) * HOLDOUT_FRACTION)) - int(quota.sum())
+    remainders = (exact - quota).sort_values(ascending=False, kind="stable")
+    for label in remainders.index[:extra]:
+        quota[label] += 1
+
+    rng = np.random.default_rng(SPLIT_SEED)
+    holdout: set[str] = set()
+    for label, k in quota.items():
+        ids = np.array(sorted(df.loc[df[LABEL_COLUMN] == label, "client_id"]), dtype=object)
+        holdout.update(rng.permutation(ids)[:k])
+    sets = np.where(df["client_id"].isin(holdout), "holdout", "selection")
+    return pd.DataFrame({"client_id": df["client_id"].astype(str), "set": sets})
 
 
 def load_sample_submission(raw_dir: Path) -> pd.DataFrame:

@@ -49,16 +49,17 @@ def test_fetch_data_repairs_a_corrupted_file(fetched):
 
 
 def test_prior_model_on_fixture_scores_hand_computed_macro_f1(fetched):
-    # valid truth: none, none, gym, cloud. The prior (train majority = none)
-    # predicts all none: F1(none) = 2 * 0.5 * 1 / 1.5 = 2/3; every family 0.
+    # evaluate scores the selection set by default: valid minus the sealed
+    # holdout (C000012), so truth is none, gym, cloud. The prior (train
+    # majority = none) predicts all none: F1(none) = 2 * 1/3 * 1 / (4/3) = 1/2.
     assert fetched.run("train", "--model", "prior") == 0
     assert fetched.run("evaluate", "--model", "prior", "--change", "prior baseline") == 0
 
     rows = read_csv_rows(fetched.log)
     assert len(rows) == 1
     row = rows[0]
-    assert float(row["macro_f1"]) == pytest.approx((2 / 3) / 8, abs=1e-4)
-    assert float(row["f1_none"]) == pytest.approx(2 / 3, abs=1e-4)
+    assert float(row["macro_f1"]) == pytest.approx((1 / 2) / 8, abs=1e-4)
+    assert float(row["f1_none"]) == pytest.approx(1 / 2, abs=1e-4)
     for family in LABELS[:-1]:
         # gym and cloud are in the truth but never predicted: they must be 0,
         # and absent families still appear in the log (fixed eight-label set).
@@ -93,8 +94,8 @@ def test_prior_model_learns_class_frequencies_from_train_labels(fetched):
     assert fetched.run("train", "--model", "prior") == 0
     assert fetched.run("evaluate", "--model", "prior") == 0
     row = read_csv_rows(fetched.log)[0]
-    # valid truth has one gym among four: precision 0.25, recall 1 -> F1 0.4
-    assert float(row["f1_gym"]) == pytest.approx(0.4, abs=1e-4)
+    # selection truth has one gym among three: precision 1/3, recall 1 -> F1 0.5
+    assert float(row["f1_gym"]) == pytest.approx(0.5, abs=1e-4)
     assert float(row["f1_none"]) == 0.0
 
     assert fetched.run("submit", "--model", "prior", "--name", "gym") == 0
@@ -111,8 +112,7 @@ def test_prior_model_returns_train_class_frequencies_for_every_client(fetched):
 
     proba = pd.read_csv(out).set_index("client_id")
     assert list(proba.columns) == LABELS
-    valid_ids = pd.read_csv(fetched.raw / "valid_labels.csv")["client_id"].tolist()
-    assert proba.index.tolist() == valid_ids
+    assert proba.index.tolist() == ["C000011", "C000013", "C000014"]  # the selection set
     expected = {"none": 0.5, "gym": 1 / 6, "cloud": 1 / 6, "insurance": 1 / 6,
                 "mobile": 0.0, "music": 0.0, "software": 0.0, "streaming": 0.0}
     for cid, row in proba.iterrows():
