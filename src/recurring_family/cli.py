@@ -28,6 +28,8 @@ class Paths:
         self.artifacts = root / "artifacts"
         self.submissions = root / "submissions"
         self.log = root / "experiments" / "log.csv"
+        # committed next to the log, so every logged run can be compared against in any clone
+        self.runs = root / "experiments" / "runs"
 
     def model(self, name: str) -> Path:
         return self.artifacts / f"{name}.json"
@@ -36,7 +38,7 @@ class Paths:
         return self.artifacts / f"{name}.meta.json"
 
     def run_predictions(self, run_id: str) -> Path:
-        return self.artifacts / "runs" / f"{run_id}.csv"
+        return self.runs / f"{run_id}.csv"
 
     @property
     def valid_split(self) -> Path:
@@ -116,6 +118,27 @@ def cmd_cv(args, paths: Paths) -> int:
     return 0
 
 
+def _best_predictions(paths: Paths, best: dict, clients: pd.Index) -> pd.Series:
+    """The previous best run's per-Client predictions, which the paired bootstrap needs for
+    exactly these Clients. Never fall back to a weaker run: that would misstate the verdict."""
+    run_id = best.get("run_id") or ""
+    path = paths.run_predictions(run_id) if run_id else None
+    if path is None or not path.exists():
+        raise data.DataError(
+            f"the previous best run on {best['split']} ({run_id or 'no run id'}, "
+            f"macro-F1 {best['macro_f1']}) has no saved predictions"
+            + (f" at {path}" if path else "")
+            + "; restore them (they are committed under experiments/runs/) before evaluating"
+        )
+    old = pd.read_csv(path, dtype=str, keep_default_na=False).set_index("client_id")["predicted"]
+    if set(old.index) != set(clients):
+        raise data.DataError(
+            f"the previous best run {run_id} on {best['split']} predicted for different Clients than this "
+            "evaluation; a paired comparison is impossible"
+        )
+    return old.reindex(clients)
+
+
 def cmd_evaluate(args, paths: Paths) -> int:
     model = _load_model(paths, args.model)
     split = "holdout" if args.checkpoint else args.split
@@ -130,22 +153,18 @@ def cmd_evaluate(args, paths: Paths) -> int:
         labels = data.load_labels(paths.raw, split).set_index("client_id")[LABEL_COLUMN]
         transactions = data.load_transactions(paths.raw, "train" if split == "train" else "valid")
         proba = model.predict_proba(transactions, labels.index)
-    if args.proba:
-        Path(args.proba).parent.mkdir(parents=True, exist_ok=True)
-        proba[list(LABELS)].to_csv(args.proba, index_label="client_id")
     predicted = predict_labels(proba).reindex(labels.index)
     scores = score(labels, predicted)
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:6]
     comparison = None
-    best = previous_best(
-        paths.log, row_type=row_type, split=split, has_predictions=lambda r: paths.run_predictions(r).exists()
-    )
+    best = previous_best(paths.log, row_type=row_type, split=split)
     if best is not None:
-        old = pd.read_csv(paths.run_predictions(best["run_id"]), dtype=str, keep_default_na=False)
-        old = old.set_index("client_id")["predicted"].reindex(labels.index)
-        if not old.isna().any():  # same Clients, so a paired comparison is possible
-            comparison = {**paired_bootstrap(labels, predicted, old), "run_id": best["run_id"]}
+        old = _best_predictions(paths, best, labels.index)
+        comparison = {**paired_bootstrap(labels, predicted, old), "run_id": best["run_id"]}
+    if args.proba:
+        Path(args.proba).parent.mkdir(parents=True, exist_ok=True)
+        proba[list(LABELS)].to_csv(args.proba, index_label="client_id")
     out = paths.run_predictions(run_id)
     out.parent.mkdir(parents=True, exist_ok=True)
     predicted.rename("predicted").to_csv(out, index_label="client_id")

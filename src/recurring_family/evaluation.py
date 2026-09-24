@@ -65,17 +65,13 @@ def verdict(comparison: dict[str, float]) -> str:
     return "tie"
 
 
-def previous_best(log_path: Path, *, row_type: str, split: str, has_predictions) -> dict | None:
-    """The best earlier run of the same row type on the same split whose predictions were kept."""
+def previous_best(log_path: Path, *, row_type: str, split: str) -> dict | None:
+    """The highest-scoring earlier run of the same row type on the same evaluation split."""
     log_path = Path(log_path)
     if not log_path.exists():
         return None
     with open(log_path, newline="") as f:
-        rows = [
-            r for r in csv.DictReader(f)
-            if r.get("row_type") == row_type and r.get("split") == split and r.get("run_id")
-            and has_predictions(r["run_id"])
-        ]
+        rows = [r for r in csv.DictReader(f) if r.get("row_type") == row_type and r.get("split") == split]
     return max(rows, key=lambda r: float(r["macro_f1"]), default=None)
 
 

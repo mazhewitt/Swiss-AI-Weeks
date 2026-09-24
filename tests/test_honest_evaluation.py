@@ -313,6 +313,81 @@ def test_checkpoint_rows_are_not_compared_with_selection_rows(fetched):
     assert read_rows(fetched.log)[-1]["verdict"] == "first"
 
 
+def run_predictions(project, run_id):
+    """Each run's per-Client predictions, committed next to the experiment log."""
+    return project.log.parent / "runs" / f"{run_id}.csv"
+
+
+def test_each_runs_predictions_are_kept_next_to_the_experiment_log(fetched, capsys):
+    big_valid(fetched)
+    selection = read_split(fetched, capsys).query("set == 'selection'")["client_id"].tolist()
+    row = evaluate_with_majority(fetched, "none", "all none")
+    saved = pd.read_csv(run_predictions(fetched, row["run_id"]), dtype=str)
+    assert saved["client_id"].tolist() == selection
+    assert set(saved["predicted"]) == {"none"}
+    assert not (fetched.root / "artifacts" / "runs").exists()  # gitignored: would not reach other clones
+
+
+def test_missing_predictions_of_the_previous_best_fail_loudly(fetched, capsys):
+    big_valid(fetched, n_none=400, n_gym=100, n_cloud=0)
+    best = evaluate_with_majority(fetched, "none", "all none")
+    weaker = evaluate_with_majority(fetched, "gym", "all gym")
+    assert weaker["compared_to"] == best["run_id"] and weaker["verdict"] == "worse"
+    run_predictions(fetched, best["run_id"]).unlink()
+    rows_before = fetched.log.read_text()
+    runs_before = sorted(run_predictions(fetched, "x").parent.iterdir())
+    capsys.readouterr()
+
+    assert fetched.run("evaluate", "--model", "prior", "--change", "all gym again") != 0
+    err = capsys.readouterr().err
+    assert best["run_id"] in err and "predictions" in err
+    # nothing silently compared against the weaker run, nothing logged
+    assert fetched.log.read_text() == rows_before
+    assert sorted(run_predictions(fetched, "x").parent.iterdir()) == runs_before
+
+
+def test_previous_best_is_the_best_row_on_the_same_evaluation_split(fetched, capsys):
+    # The ticket-01 row: logged against all of valid, before run ids existed; scored high.
+    old_header = "date,change,model,split,macro_f1," + ",".join(f"f1_{l}" for l in LABELS) + ",conclusion\n"
+    old_row = "2026-09-24T12:42:56+00:00,old run,prior,valid,0.9000," + ",".join(["0.0000"] * 8) + ",floor\n"
+    fetched.log.parent.mkdir(parents=True, exist_ok=True)
+    fetched.log.write_text(old_header + old_row)
+    big_valid(fetched, n_none=400, n_gym=100, n_cloud=0)
+
+    weak = evaluate_with_majority(fetched, "gym", "all gym")  # selection: (2*0.2/1.2)/8 ~ 0.042
+    assert weak["verdict"] == "first"
+    set_train_majority(fetched, "none")
+    assert fetched.run("train", "--model", "prior") == 0
+    assert fetched.run("evaluate", "--model", "prior", "--split", "train", "--change", "train split") == 0
+    on_train = read_rows(fetched.log)[-1]
+    assert fetched.run("evaluate", "--model", "prior", "--checkpoint", "--change", "checkpoint") == 0
+    checkpoint = read_rows(fetched.log)[-1]
+    assert float(on_train["macro_f1"]) > float(weak["macro_f1"])
+    assert float(checkpoint["macro_f1"]) > float(weak["macro_f1"])
+    # Rows on other splits are not candidates, so their predictions are not needed.
+    run_predictions(fetched, on_train["run_id"]).unlink()
+    run_predictions(fetched, checkpoint["run_id"]).unlink()
+
+    assert fetched.run("evaluate", "--model", "prior", "--change", "all none") == 0
+    selection = read_rows(fetched.log)[-1]
+    assert selection["split"] == "selection"
+    assert selection["compared_to"] == weak["run_id"]
+    assert selection["verdict"] == "improvement"
+
+
+def test_previous_best_predictions_for_other_clients_fail_loudly(fetched, capsys):
+    set_train_majority(fetched, "none")
+    assert fetched.run("train", "--model", "prior") == 0
+    assert fetched.run("evaluate", "--model", "prior", "--split", "train") == 0
+    best = read_rows(fetched.log)[-1]
+    write_labels(fetched, "train", {"C000001": "none", "C000002": "gym"})  # different Clients now
+    capsys.readouterr()
+    assert fetched.run("evaluate", "--model", "prior", "--split", "train") != 0
+    err = capsys.readouterr().err
+    assert best["run_id"] in err and "Clients" in err
+    assert len(read_rows(fetched.log)) == 1
+
+
 def test_log_written_before_this_ticket_is_migrated_not_misaligned(fetched):
     old_header = "date,change,model,split,macro_f1," + ",".join(f"f1_{l}" for l in LABELS) + ",conclusion\n"
     old_row = "2026-09-24T12:42:56+00:00,old run,prior,valid,0.0567," + ",".join(["0.0000"] * 8) + ",floor\n"
@@ -343,6 +418,41 @@ def test_refit_on_train_plus_selection_uses_selection_labels_but_not_holdout(fet
     assert proba["gym"] == pytest.approx(36 / 41)
     assert proba["none"] == pytest.approx(3 / 41)
     assert len(labels) == 50
+
+
+class TransactionRecorder(models.PriorModel):
+    """Records whose transactions every fit call was given."""
+
+    name = "recorder"
+    fits: list = []
+
+    def fit(self, transactions, labels):
+        type(self).fits.append(set(transactions["client_id"]))
+        return super().fit(transactions, labels)
+
+
+@pytest.mark.parametrize("command", ["train", "cv"])
+@pytest.mark.parametrize("with_selection", [False, True])
+def test_training_fits_on_train_and_selection_transactions_but_never_holdout(
+    fetched, monkeypatch, capsys, command, with_selection
+):
+    monkeypatch.setattr(TransactionRecorder, "fits", [])
+    monkeypatch.setitem(models.MODELS, "recorder", TransactionRecorder)
+    split = read_split(fetched, capsys)
+    selection = set(split.query("set == 'selection'")["client_id"])
+    holdout = set(split.query("set == 'holdout'")["client_id"])
+    train = set(pd.read_csv(fetched.raw / "train_labels.csv", dtype=str)["client_id"])
+    # the fixture has transactions for every valid Client, so either leak would be visible
+    valid_tx = set(pd.read_json(fetched.raw / "valid_transactions.jsonl", lines=True, dtype=str)["client_id"])
+    assert selection and holdout and valid_tx == selection | holdout
+
+    flags = ["--with-selection"] if with_selection else []
+    extra = ["--folds", "2", "--out", str(fetched.root / "oof.csv")] if command == "cv" else []
+    assert fetched.run(command, "--model", "recorder", *flags, *extra) == 0
+
+    seen = set().union(*TransactionRecorder.fits)
+    assert seen == (train | selection if with_selection else train)
+    assert not seen & holdout
 
 
 def test_model_refit_with_selection_cannot_be_scored_on_the_selection_set(fetched, capsys):
