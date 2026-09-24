@@ -64,7 +64,7 @@ _STREAMING_HINTS = {"media", "video"}
 _AMBIGUOUS = (
     ({"premium"}, frozenset({"software", MUSIC_OR_STREAMING})),
     ({"digital", "plus"}, frozenset({"mobile", MUSIC_OR_STREAMING})),
-    ({"monthly", "plan"}, frozenset({"mobile"})),
+    ({"monthly", "plan"}, frozenset({"mobile"})),  # off 4814 it falls back to filler for the home family
     ({"service", "plan"}, frozenset({"cloud"})),  # last: "service" is also a noise suffix
 )
 
@@ -213,8 +213,12 @@ def _client_streams(client, payments, refunds, cutoff, params):
 
     # Filler and unresolved rows join the stream whose amount and family they fit; else dropped.
     for i in np.flatnonzero(group == None):  # noqa: E711
-        if kind[i] in ("filler", "ambiguous"):
+        if kind[i] == "filler":
             stream_of[i] = fit(log_amount[i], families[i])
+        elif kind[i] == "ambiguous":
+            # MCC vote failed: the description may still be filler for its MCC's home family.
+            home = HOME_MCC.get(mcc[i])
+            stream_of[i] = fit(log_amount[i], families[i] | ({home} if home else set()))
 
     refund_counts = np.zeros(len(streams), dtype=int)
     for d, m, a in zip(refunds["description"], refunds["mcc"], refunds["amount"]):

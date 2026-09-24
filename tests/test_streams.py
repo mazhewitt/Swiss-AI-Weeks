@@ -147,6 +147,24 @@ def test_filler_descriptions_stay_in_the_stream_their_amount_and_mcc_fit():
     assert (s.family, s.n_payments) == ("gym", 7)
 
 
+@pytest.mark.parametrize(
+    "anchor, mcc, amount, family",
+    [
+        ("gym membership", "7997", 66, "gym"),
+        ("insurance policy", "6300", 42, "insurance"),
+        ("saas suite", "5734", 19, "software"),
+        ("cloud storage", "5732", 9, "cloud"),
+    ],
+)
+@pytest.mark.parametrize("filler", ["monthly plan", "mth plan"])
+def test_monthly_plan_is_filler_in_a_non_mobile_stream_it_fits(anchor, mcc, amount, family, filler):
+    rows = series("C1", anchor, mcc, amount, "2025-06-05", 7)
+    rows[2]["description"] = filler
+    rows[5]["description"] = filler
+    s = one(detect_streams(frame(rows)))
+    assert (s.family, s.n_payments) == (family, 7)
+
+
 def test_filler_descriptions_alone_never_form_a_stream():
     rows = series("C1", "subscription charge", "7997", 66, "2025-06-05", 6)
     assert detect_streams(frame(rows)).empty
