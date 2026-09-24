@@ -102,6 +102,25 @@ def test_prior_model_learns_class_frequencies_from_train_labels(fetched):
     assert set(sub["predicted_next_recurring_merchant"]) == {"gym"}
 
 
+def test_prior_model_returns_train_class_frequencies_for_every_client(fetched):
+    # train labels: gym, cloud, none, none, insurance, none
+    # -> none 3/6, gym/cloud/insurance 1/6 each, other families 0.
+    assert fetched.run("train", "--model", "prior") == 0
+    out = fetched.root / "proba.csv"
+    assert fetched.run("evaluate", "--model", "prior", "--proba", str(out)) == 0
+
+    proba = pd.read_csv(out).set_index("client_id")
+    assert list(proba.columns) == LABELS
+    valid_ids = pd.read_csv(fetched.raw / "valid_labels.csv")["client_id"].tolist()
+    assert proba.index.tolist() == valid_ids
+    expected = {"none": 0.5, "gym": 1 / 6, "cloud": 1 / 6, "insurance": 1 / 6,
+                "mobile": 0.0, "music": 0.0, "software": 0.0, "streaming": 0.0}
+    for cid, row in proba.iterrows():
+        assert row.sum() == pytest.approx(1.0, abs=1e-9)
+        for label, value in expected.items():
+            assert row[label] == pytest.approx(value, abs=1e-9), (cid, label)
+
+
 # --- submit -------------------------------------------------------------------
 
 

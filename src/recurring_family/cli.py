@@ -58,7 +58,11 @@ def cmd_evaluate(args, paths: Paths) -> int:
     model = _load_model(paths, args.model)
     labels = data.load_labels(paths.raw, args.split).set_index("client_id")[LABEL_COLUMN]
     transactions = data.load_transactions(paths.raw, args.split)
-    predicted = predict_labels(model.predict_proba(transactions, labels.index))
+    proba = model.predict_proba(transactions, labels.index)
+    if args.proba:
+        Path(args.proba).parent.mkdir(parents=True, exist_ok=True)
+        proba[list(LABELS)].to_csv(args.proba, index_label="client_id")
+    predicted = predict_labels(proba)
     scores = score(labels, predicted.reindex(labels.index))
     append_log(
         paths.log,
@@ -106,6 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--split", choices=data.LABELLED_SPLITS, default="valid")
     p.add_argument("--change", default="", help="what changed in this run")
     p.add_argument("--conclusion", default="", help="what the run tells us")
+    p.add_argument("--proba", metavar="CSV", help="also write per-Client label probabilities to this CSV")
     p.set_defaults(func=cmd_evaluate)
 
     p = sub.add_parser("submit", parents=[common], help="write or check a submission CSV")
