@@ -4,11 +4,17 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] `--decision tuned` fits per-class weights and a `none` threshold by grid search on out-of-fold probabilities only (never on the evaluated Clients)
-- [ ] Uniform weights with no threshold reproduce argmax exactly
-- [ ] A `none` threshold of 0 yields no `none` predictions; a threshold of 1 yields all `none`
-- [ ] On its own fitting data, the tuned decisions never have lower macro-F1 than argmax
-- [ ] Fitting never reads valid or sealed-holdout labels (the guards from 02 stay green)
-- [ ] Tested through the CLI against fixture data (Seam 1)
+- [x] `--decision tuned` fits per-class weights and a `none` threshold by grid search on out-of-fold probabilities only (never on the evaluated Clients)
+- [x] Uniform weights with no threshold reproduce argmax exactly
+- [x] A `none` threshold of 0 yields no `none` predictions; a threshold of 1 yields all `none`
+- [x] On its own fitting data, the tuned decisions never have lower macro-F1 than argmax
+- [x] Fitting never reads valid or sealed-holdout labels (the guards from 02 stay green)
+- [x] Tested through the CLI against fixture data (Seam 1)
+
+## Comments
+
+- Merged into main as 4b3b2a0 ("Merge ticket 04: decision-layer"); clean auto-merge (cli.py, SOLUTION.md).
+- Tests after merge: `uv run pytest -m "not slow"` -> 178 passed.
+- Experiment (run 20260924T140433-16f903, `rf train --model prior --decision tuned` then `rf evaluate --model prior --split selection --decision tuned`): selection macro-F1 0.0566 (none F1 0.4530, every family 0.0000); delta +0.0000 vs the prior baseline 20260924T134044-2e6cd3 -> tie. Expected: the prior model gives every Client the same probabilities, so the out-of-fold fit (0.0575 argmax -> 0.0575 tuned) keeps uniform weights and no none threshold. The decision layer earns its keep only on a model whose probabilities vary by Client (E1/E2).
