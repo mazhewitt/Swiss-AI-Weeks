@@ -387,3 +387,45 @@ def test_leakage_trap_label_derived_description_rates_are_fitted_out_of_fold(fet
     predicted = oof[LABELS].idxmax(axis=1)
     accuracy = (predicted == pd.Series(labels)).mean()
     assert accuracy >= 0.75, accuracy
+
+
+def own_label_probe(project, split, prefix, rng):
+    """40 Clients, each with one Active gym stream under a description no one else has, and a
+    random gym / none label: the description can only ever say something about its own Client."""
+    rows, labels = [], {}
+    for i in range(40):
+        client = f"{prefix}{i:03d}"
+        rows += series(client, f"gym membership {prefix.lower()}{i:03d}", "7997", 66, "2025-07-10", 6)
+        labels[client] = "gym" if rng.random() < 0.5 else "none"
+    write_transactions(project, split, rows)
+    write_labels(project, split, labels)
+    return pd.Series(labels)
+
+
+def assert_no_own_label_signal(rate, labels):
+    rate = rate.reindex(labels.index)
+    gym, none = rate[labels == "gym"], rate[labels == "none"]
+    assert len(gym) and len(none)
+    # fitted on the Client's own label the rate would split the two groups perfectly
+    assert gym.min() <= none.max(), (gym.min(), none.max())
+    # out of fold every description here is unseen, so it encodes as unknown: one shared rate
+    assert rate.nunique() == 1, rate.value_counts()
+
+
+@pytest.mark.parametrize("with_selection", [False, True])
+def test_features_for_the_clients_the_model_was_fitted_on_are_out_of_fold(fetched, with_selection):
+    # `features` writes the rows the model scores; for Clients whose labels it was fitted on, that
+    # must be the out-of-fold matrix it trained on, else the file carries each Client's own label.
+    rng = np.random.default_rng(11)
+    if with_selection:
+        labels = own_label_probe(fetched, "valid", "V", rng)
+        assert fetched.run("split") == 0
+        sets = pd.read_csv(fetched.root / "artifacts" / "valid_split.csv", dtype=str).set_index("client_id")["set"]
+        labels = labels[sets.reindex(labels.index) == "selection"]
+        assert fetched.run("train", "--model", "lgbm", "--with-selection") == 0
+        rate = features(fetched, "valid")["slot1_description_rate"]
+    else:
+        labels = own_label_probe(fetched, "train", "T", rng)
+        assert fetched.run("train", "--model", "lgbm") == 0
+        rate = features(fetched, "train")["slot1_description_rate"]
+    assert_no_own_label_signal(rate, labels)

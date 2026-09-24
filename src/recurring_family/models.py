@@ -81,7 +81,7 @@ class LgbmModel:
             raise ValueError(f"labels outside the allowed set: {sorted(unknown)}")
         streams = _streams_of(transactions, labels.index)
         # the description rate is label-derived: training rows get it out of fold
-        x = client_features(streams, labels.index, out_of_fold_description_rates(streams, labels))
+        x = _out_of_fold_features(streams, labels)
         self.rates = DescriptionRates.fit(streams, labels)
         self.classes = sorted(set(labels))
         self.booster = None
@@ -92,8 +92,15 @@ class LgbmModel:
             self.booster = model.booster_
         return self
 
+    @staticmethod
+    def training_features(transactions: pd.DataFrame, labels: pd.Series) -> pd.DataFrame:
+        """The rows `fit` trains on, one per labelled Client. The description rate is label-derived,
+        so each row gets it out of fold: no Client's own label reaches its row."""
+        return _out_of_fold_features(_streams_of(transactions, labels.index), labels)
+
     def features(self, transactions: pd.DataFrame, clients: pd.Index) -> pd.DataFrame:
-        """The feature rows this model scores, one per Client in `clients`."""
+        """The feature rows this model scores for Clients it was not fitted on, one per Client in
+        `clients`. For its training Clients use `training_features`."""
         if self.rates is None:
             raise RuntimeError("LgbmModel is not fitted")
         streams = _streams_of(transactions, clients)
@@ -132,6 +139,10 @@ class LgbmModel:
 
 def _streams_of(transactions: pd.DataFrame, clients: pd.Index) -> pd.DataFrame:
     return detect_streams(transactions[transactions["client_id"].isin(set(clients))])
+
+
+def _out_of_fold_features(streams: pd.DataFrame, labels: pd.Series) -> pd.DataFrame:
+    return client_features(streams, labels.index, out_of_fold_description_rates(streams, labels))
 
 
 MODELS: dict[str, type] = {"prior": PriorModel, "lgbm": LgbmModel}

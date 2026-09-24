@@ -205,6 +205,17 @@ def cmd_features(args, paths: Paths) -> int:
     transactions = data.load_transactions(paths.raw, args.split)
     clients = pd.Index(sorted(transactions["client_id"].astype(str).unique()), name="client_id")
     rows = model.features(transactions, clients)
+    # the Clients whose labels the model was fitted on get the out-of-fold rows it trained on:
+    # encoded with the fitted description rates, their rows would carry their own labels
+    meta = paths.model_meta("lgbm")
+    with_selection = "selection" in (json.loads(meta.read_text())["fitted_on"] if meta.exists() else ["train"])
+    if args.split == "train" or (args.split == "valid" and with_selection):
+        with data.training_run(with_selection=with_selection):
+            train_tx, train_labels = _training_data(paths, with_selection)
+        trained = clients.intersection(train_labels.index)
+        if len(trained):
+            out_of_fold = model.training_features(train_tx, train_labels)
+            rows = pd.concat([rows.drop(trained), out_of_fold.loc[trained]]).reindex(clients)
     out = Path(args.out) if args.out else paths.artifacts / "features" / f"{args.split}.csv"
     out.parent.mkdir(parents=True, exist_ok=True)
     rows.to_csv(out, index_label="client_id")
