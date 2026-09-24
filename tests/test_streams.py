@@ -578,6 +578,13 @@ def test_many_clients_and_empty_input():
     assert empty.empty and list(empty.columns) == list(streams.columns)
 
 
+def test_a_history_whose_streams_all_have_one_payment_gives_a_typed_table():
+    # no stream has a next payment, so that column holds nothing but NaT
+    streams = detect_streams(frame(series("C1", "gym membership", "7997", 66, "2025-09-05", 1)))
+    assert len(streams) == 1 and pd.isna(one(streams).next_payment)
+    assert str(streams["next_payment"].dtype) == "datetime64[ns, UTC]"
+
+
 # --- noise suffixes and off-home-MCC keywords -----------------------------------
 
 

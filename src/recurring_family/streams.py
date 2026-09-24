@@ -181,6 +181,9 @@ def detect_streams(
     for _, _, client_rows, _ in _detect_per_client(transactions, cutoff, params):
         rows.extend(client_rows)
     table = pd.DataFrame(rows, columns=COLUMNS)
+    for column in ("first_payment", "last_payment", "next_payment"):
+        # a column of NaT only (every stream a single payment) is inferred timezone-naive
+        table[column] = pd.to_datetime(table[column], utc=True)
     return table.astype(
         {
             "client_id": "string",
