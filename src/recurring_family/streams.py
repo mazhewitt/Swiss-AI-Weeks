@@ -18,6 +18,10 @@ the rest form streams that are split into music or streaming by amount.
 
 A refund is credited to a stream only when it reverses one of the stream's payments: a payment
 of matching amount made shortly before it. Each payment is reversed at most once.
+
+Each stream also reports its most common MCC and description (words lower-cased, abbreviations
+expanded) and the share of its payments whose description is family-specific: a family keyword
+names exactly one family, unlike an ambiguous description or a Filler Description.
 """
 
 from __future__ import annotations
@@ -88,6 +92,9 @@ COLUMNS = [
     "active",
     "n_refunds",
     "refund_rate",
+    "mcc",
+    "description",
+    "family_description_share",
 ]
 
 
@@ -108,6 +115,16 @@ class StreamParams:
 
 def _words(description: str) -> list[str]:
     return [_ABBREVIATIONS.get(w, w) for w in re.findall(r"[a-z0-9]+", str(description).lower())]
+
+
+def _canonical_description(description: str) -> str:
+    return " ".join(_words(description))
+
+
+def _family_specific(description: str) -> bool:
+    """A family keyword names exactly one detection group (music and streaming count as one)."""
+    words = set(_words(description))
+    return sum(bool(words & keys) for keys in _FAMILY_WORDS.values()) == 1
 
 
 def _evidence(description: str, mcc: str) -> tuple[str, frozenset[str], str | None]:
@@ -181,6 +198,9 @@ def detect_streams(
             "active": "bool",
             "n_refunds": "int64",
             "refund_rate": "float64",
+            "mcc": "string",
+            "description": "string",
+            "family_description_share": "float64",
         }
     )
 
@@ -282,6 +302,8 @@ def _client_streams(client, payments, refunds, cutoff, params):
 
     times = payments["timestamp"].to_numpy()
     amounts = payments["amount"].to_numpy(dtype=float)
+    descriptions = np.array([_canonical_description(d) for d in payments["description"]], dtype=object)
+    specific = np.array([_family_specific(d) for d in payments["description"]])
     out = []
     for s, (g, _, _) in enumerate(streams):
         if g is None:
@@ -291,11 +313,21 @@ def _client_streams(client, payments, refunds, cutoff, params):
         family = g
         if g == MUSIC_OR_STREAMING:
             family = _split_music_streaming([hints[i] for i in members], amounts[members], params)
-        out.append(_summarise(client, family, pd.DatetimeIndex(times[members]), amounts[members], refund_counts[s], cutoff, params))
+        row = _summarise(client, family, pd.DatetimeIndex(times[members]), amounts[members], refund_counts[s], cutoff, params)
+        row["mcc"] = _most_common(mcc[members])
+        row["description"] = _most_common(descriptions[members])
+        row["family_description_share"] = float(specific[members].mean())
+        out.append(row)
     out.sort(key=lambda r: (r["family"], r["median_amount"], r["first_payment"]))
     for n, r in enumerate(out):
         r["stream_id"] = n
     return out
+
+
+def _most_common(values) -> str:
+    """The most frequent value; ties go to the smallest, so the result never depends on row order."""
+    counts = pd.Series(values, dtype=object).value_counts()
+    return str(min(counts[counts == counts.max()].index))
 
 
 def _match_refunds(refunds, stream_of, stream_groups, payment_ns, log_amount, params) -> np.ndarray:

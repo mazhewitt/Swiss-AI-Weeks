@@ -712,3 +712,40 @@ def test_an_unresolved_ambiguous_payment_joins_only_a_fitting_stream_of_its_home
     description, mcc, amount, family
 ):
     assert _joined_family(description, mcc, amount) == family
+
+
+# --- per-stream MCC, description and share of family-specific descriptions -------
+# E2 builds its slot MCC and `none` signals from these columns, never from raw transactions.
+
+
+def test_a_stream_reports_its_modal_mcc_and_description_and_its_share_of_family_specific_descriptions():
+    # 4 "gym membership" payments (a family keyword), 2 Filler Descriptions ("member plan") and one
+    # abbreviated noisy variant; 5 on the home MCC and 2 on a stray one.
+    rows = series("C1", "gym membership", "7997", 66, "2025-06-05", 4)
+    rows += series("C1", "member plan", "7997", 66, "2025-10-03", 2)
+    rows += series("C1", "billing gym membership online", "5999", 66, "2025-12-02", 1)
+    rows += series("C1", "gym membership", "5999", 66, "2025-06-20", 1)
+    s = one(detect_streams(frame(rows)))
+    assert (s.family, s.n_payments) == ("gym", 8)
+    assert s.mcc == "7997"
+    assert s.description == "gym membership"
+    # family keyword payments: 4 + 1 + 1 of 8 ("member plan" names no family)
+    assert s.family_description_share == pytest.approx(6 / 8)
+
+
+def test_a_stream_of_ambiguous_descriptions_has_no_family_specific_descriptions():
+    rows = series("C1", "prem plan", "5812", 18, "2025-06-05", 3)
+    rows += series("C1", "premium plan", "5812", 18, "2025-09-03", 2)
+    rows += series("C1", "prem plan", "5812", 18, "2025-11-02", 1)
+    s = one(detect_streams(frame(rows)))
+    assert s.family == "streaming"
+    assert s.description == "premium plan"  # abbreviations expanded, so both spellings count as one
+    assert s.family_description_share == 0.0
+
+
+def test_a_stream_mostly_paid_on_a_stray_mcc_reports_that_mcc():
+    rows = series("C1", "cloud backup", "5732", 6.8, "2025-06-05", 3)
+    rows += series("C1", "cloud backup", "5999", 6.8, "2025-09-03", 4)
+    s = one(detect_streams(frame(rows)))
+    assert (s.family, s.n_payments, s.mcc) == ("cloud", 7, "5999")
+    assert s.family_description_share == 1.0
