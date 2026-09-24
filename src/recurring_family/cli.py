@@ -14,12 +14,13 @@ from . import data
 from . import decision as decision_layer
 from .config import CUTOFF, HORIZON, LABEL_COLUMN, LABELS, MERCHANT_FAMILIES, SHIFTED_CUTOFF
 from .cross_validation import CV_FOLDS, out_of_fold_proba
-from .evaluation import append_log, log_row, paired_bootstrap, previous_best, score
+from .evaluation import append_log, latest_fidelity, log_row, paired_bootstrap, previous_best, score
 from .fetch import fetch_data
 from .models import MODELS, predict_labels
 from .pseudo import (
     FIDELITY_CANDIDATES, NONE_SHARE_TOLERANCE, PSEUDO_MIN_PAYMENTS, RULE_F1_TOLERANCE, fidelity_check, milestone2_rule,
 )
+from .ranker import PSEUDO_WEIGHT, pseudo_examples
 from .rules import DEFAULT_NONE_GATE, DEFAULT_ORDERING, ORDERINGS
 from .streams import StreamParams, cached_pseudo_labels, cached_streams
 from .submission import InvalidSubmission, read_submission, validate, write_submission
@@ -149,6 +150,34 @@ def utc_date(text: str) -> pd.Timestamp:
         return pd.Timestamp(pd.Timestamp(text).date(), tz="UTC")
     except ValueError:
         raise argparse.ArgumentTypeError(f"expected a date YYYY-MM-DD; got {text!r}") from None
+
+
+def pseudo_source(text: str) -> tuple[str, pd.Timestamp]:
+    """`SPLIT` or `SPLIT:YYYY-MM-DD`: a split's Clients Pseudo-Labelled at a Shifted Cutoff
+    (default: the latest fully observed one)."""
+    split, sep, cutoff = text.partition(":")
+    if split not in data.SPLITS:
+        raise argparse.ArgumentTypeError(
+            f"expected SPLIT[:YYYY-MM-DD] with SPLIT one of {', '.join(data.SPLITS)}; got {text!r}"
+        )
+    return split, utc_date(cutoff) if sep else SHIFTED_CUTOFF
+
+
+def positive_weight(text: str) -> float:
+    try:
+        weight = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a positive weight; got {text!r}") from None
+    if not weight > 0 or weight == float("inf"):
+        raise argparse.ArgumentTypeError(f"expected a positive weight; got {text!r}")
+    return weight
+
+
+def min_payments(text: str) -> int:
+    n = payment_count(text)
+    if n < 2:
+        raise argparse.ArgumentTypeError(f"a Recurring Stream repeats: expected at least 2 payments; got {text!r}")
+    return n
 
 
 def payment_counts(text: str) -> tuple[int, ...]:
@@ -311,8 +340,65 @@ def _fitted_on(with_selection: bool) -> list[str]:
     return ["train", "selection"] if with_selection else ["train"]
 
 
-def _new_model(args):
-    """A fresh model; the rule baseline takes its ordering rule, `none`-gate and stream parameters from `train`."""
+def _pseudo_training(args, paths: Paths) -> tuple[pd.DataFrame | None, dict | None]:
+    """The Pseudo-Labelled training rows of `--pseudo` sources, and what they were: each source's split,
+    Shifted Cutoff and Pseudo-Labelled Clients, the weight, the labeller's minimum payments and the
+    latest fidelity check. Made from transactions only: no label file is read, so any split may be a
+    source. Each Client's Candidate Streams come from its transactions before the Shifted Cutoff."""
+    if not getattr(args, "pseudo", None):
+        return None, None
+    weight = PSEUDO_WEIGHT if args.pseudo_weight is None else args.pseudo_weight
+    minimum = args.pseudo_min_payments or PSEUDO_MIN_PAYMENTS
+    parts, sources = [], []
+    for split, cutoff in args.pseudo:
+        args_for_split = argparse.Namespace(split=split, cutoff=cutoff)
+        [(labels, _)] = _pseudo_label_tables(args_for_split, paths, StreamParams(), (minimum,)).values()
+        with data.pseudo_labelling():
+            streams, _ = cached_streams(paths.raw, split, paths.streams, cutoff=cutoff)
+        rows = pseudo_examples(streams, labels, cutoff)
+        # the same Client may be a source at two Shifted Cutoffs, or also real-labelled: keep them apart
+        rows["client_id"] = f"{split}@{cutoff:%Y-%m-%d}:" + rows["client_id"].astype(str)
+        parts.append(rows)
+        sources.append({"split": split, "cutoff": f"{cutoff:%Y-%m-%d}", "clients": int(len(labels))})
+    info = {"sources": sources, "weight": weight, "min_payments": minimum, "fidelity": latest_fidelity(paths.log)}
+    return pd.concat(parts, ignore_index=True), info
+
+
+def _sources_text(pseudo: dict) -> str:
+    return ";".join(f"{s['split']}@{s['cutoff']}" for s in pseudo["sources"])
+
+
+def _pseudo_text(pseudo: dict) -> str:
+    return (
+        f"Pseudo-Labels {', '.join(_sources_text(pseudo).split(';'))}, weight {pseudo['weight']:g}, "
+        f"min_payments {pseudo['min_payments']}"
+    )
+
+
+def _fidelity_note(pseudo: dict) -> str:
+    fidelity = pseudo["fidelity"]
+    if fidelity is None:
+        return "no fidelity check logged: these Pseudo-Labels are not validated (run `pseudo-labels --fidelity`)"
+    if fidelity["verdict"] == "pass":
+        return f"the latest Pseudo-Label fidelity check {fidelity['run_id']} passed"
+    return (
+        f"the latest Pseudo-Label fidelity check {fidelity['run_id']} failed: training ran anyway, "
+        "but this is not a validated setup"
+    )
+
+
+def _fidelity_column(pseudo: dict | None) -> str:
+    if pseudo is None:
+        return ""
+    fidelity = pseudo["fidelity"]
+    return "unchecked" if fidelity is None else f"{fidelity['verdict']} {fidelity['run_id']}"
+
+
+def _new_model(args, pseudo: pd.DataFrame | None = None, info: dict | None = None):
+    """A fresh model; the rule baseline takes its ordering rule, `none`-gate and stream parameters from
+    `train`; the ranker pools any Pseudo-Labelled training rows into its fit."""
+    if args.model == "ranker" and pseudo is not None:
+        return MODELS["ranker"](pseudo=pseudo, pseudo_weight=info["weight"])
     if args.model != "rules":
         return MODELS[args.model]()
     params = dataclasses.replace(StreamParams(), **dict(args.param))
@@ -320,24 +406,41 @@ def _new_model(args):
 
 
 def cmd_train(args, paths: Paths) -> int:
+    pseudo, info = _pseudo_training(args, paths)
     with data.training_run(with_selection=args.with_selection):
         transactions, labels = _training_data(paths, args.with_selection)
-        model = _new_model(args).fit(transactions, labels)
+        model = _new_model(args, pseudo, info).fit(transactions, labels)
         if args.decision == "tuned":
-            # fitted on out-of-fold probabilities of the training Clients only
-            oof = out_of_fold_proba(lambda: _new_model(args), transactions, labels, folds=args.folds)
+            # fitted on out-of-fold probabilities of the real-labelled training Clients only: Pseudo-Labelled
+            # Clients join every fold's fit but are never scored, so none reaches the decision layer
+            oof = out_of_fold_proba(lambda: _new_model(args, pseudo, info), transactions, labels, folds=args.folds)
             decision, fit_scores = decision_layer.fit(oof[list(LABELS)], labels)
+    pseudo_clients = sum(s["clients"] for s in info["sources"]) if info else 0
     paths.artifacts.mkdir(parents=True, exist_ok=True)
     model.save(paths.model(args.model))
-    paths.model_meta(args.model).write_text(json.dumps({"fitted_on": _fitted_on(args.with_selection)}))
-    print(
-        f"train: {args.model} fitted on {len(labels)} Clients ({' + '.join(_fitted_on(args.with_selection))})"
-        f" -> {paths.model(args.model)}"
+    paths.model_meta(args.model).write_text(
+        json.dumps(
+            {
+                "fitted_on": _fitted_on(args.with_selection),
+                "training_clients": len(labels) + pseudo_clients,
+                "pseudo": info,
+            }
+        )
     )
+    fitted_on = " + ".join(_fitted_on(args.with_selection))
+    if info is None:
+        print(f"train: {args.model} fitted on {len(labels)} Clients ({fitted_on}) -> {paths.model(args.model)}")
+    else:
+        print(
+            f"train: {args.model} fitted on {len(labels)} real-labelled + {pseudo_clients} Pseudo-Labelled Clients "
+            f"({fitted_on}; {_pseudo_text(info)}) -> {paths.model(args.model)}"
+        )
+        print(f"  {_fidelity_note(info)}")
     if args.decision == "tuned":
         decision.save(paths.decision(args.model))
         print(
-            f"  decision layer tuned on {args.folds}-fold out-of-fold probabilities: macro-F1 "
+            f"  decision layer tuned on {args.folds}-fold out-of-fold probabilities of the real-labelled "
+            f"Clients: macro-F1 "
             f"{fit_scores['argmax_macro_f1']:.4f} (argmax) -> {fit_scores['tuned_macro_f1']:.4f} (tuned)"
             f" -> {paths.decision(args.model)}"
         )
@@ -352,13 +455,24 @@ def cmd_train(args, paths: Paths) -> int:
 
 
 def cmd_cv(args, paths: Paths) -> int:
+    pseudo, info = _pseudo_training(args, paths)
+    make_model = MODELS[args.model] if info is None else (lambda: _new_model(args, pseudo, info))
     with data.training_run(with_selection=args.with_selection):
         transactions, labels = _training_data(paths, args.with_selection)
-        oof = out_of_fold_proba(MODELS[args.model], transactions, labels, folds=args.folds)
+        # folds are drawn over the real-labelled Clients only; Pseudo-Labelled ones join every fold's fit
+        oof = out_of_fold_proba(make_model, transactions, labels, folds=args.folds)
     out = Path(args.out) if args.out else paths.artifacts / "oof" / f"{args.model}.csv"
     out.parent.mkdir(parents=True, exist_ok=True)
     oof.to_csv(out, index_label="client_id")
-    print(f"cv: {args.model} {args.folds}-fold out-of-fold probabilities for {len(oof)} Clients -> {out}")
+    if info is None:
+        print(f"cv: {args.model} {args.folds}-fold out-of-fold probabilities for {len(oof)} Clients -> {out}")
+    else:
+        print(
+            f"cv: {args.model} {args.folds}-fold out-of-fold probabilities for {len(oof)} real-labelled Clients "
+            f"(every fold also fitted on {sum(s['clients'] for s in info['sources'])} Pseudo-Labelled Clients: "
+            f"{_pseudo_text(info)}) -> {out}"
+        )
+        print(f"  {_fidelity_note(info)}")
     return 0
 
 
@@ -419,8 +533,10 @@ def cmd_evaluate(args, paths: Paths) -> int:
     model = _load_model(paths, args.model)
     split = "holdout" if args.checkpoint else args.split
     row_type = "checkpoint" if args.checkpoint else "evaluate"
-    meta = paths.model_meta(args.model)
-    fitted_on = json.loads(meta.read_text())["fitted_on"] if meta.exists() else ["train"]
+    meta_path = paths.model_meta(args.model)
+    meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+    fitted_on = meta.get("fitted_on", ["train"])
+    pseudo = meta.get("pseudo")
     if split == "selection" and split in fitted_on:
         raise data.DataError(
             f"{args.model} was fitted on {' + '.join(fitted_on)}; scoring it on the selection set is not honest"
@@ -457,12 +573,25 @@ def cmd_evaluate(args, paths: Paths) -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     predicted.rename("predicted").to_csv(out, index_label="client_id")
 
+    name = args.model + getattr(model, "variant", "") + ("+pseudo" if pseudo else "") + _decision_name(args.decision)
     row = log_row(
-        scores, change=args.change, model=args.model + getattr(model, "variant", "") + _decision_name(args.decision), split=split, conclusion=args.conclusion,
+        scores, change=args.change, model=name, split=split, conclusion=args.conclusion,
         row_type=row_type, run_id=run_id, comparison=comparison, diagnostics=diagnostics,
     )
+    row["training_clients"] = meta.get("training_clients", "")
+    if pseudo:
+        row.update(
+            {
+                "pseudo_sources": _sources_text(pseudo),
+                "pseudo_weight": f"{pseudo['weight']:g}",
+                "pseudo_min_payments": pseudo["min_payments"],
+                "fidelity": _fidelity_column(pseudo),
+            }
+        )
     append_log(paths.log, row)
     print(f"evaluate{' (checkpoint)' if args.checkpoint else ''}: {args.model} on {split} ({len(labels)} Clients)")
+    if pseudo:
+        print(f"  trained with {_pseudo_text(pseudo)}; {_fidelity_note(pseudo)}")
     if comparison is None:
         print("  no comparable previous best: verdict first")
     else:
@@ -569,6 +698,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="tuned: also fit the E3 decision layer on out-of-fold probabilities",
     )
     p.add_argument("--folds", type=int, default=CV_FOLDS, help="folds for the tuned decision layer's out-of-fold fit")
+    p.add_argument(
+        "--pseudo", type=pseudo_source, action="append", default=[], metavar="SPLIT[:YYYY-MM-DD]",
+        help="ranker only: also fit on this split's Clients Pseudo-Labelled at a Shifted Cutoff "
+        f"(default {SHIFTED_CUTOFF:%Y-%m-%d}); repeatable. They are never scored out of fold",
+    )
+    p.add_argument(
+        "--pseudo-weight", type=positive_weight, metavar="W",
+        help=f"--pseudo: sample weight of the Pseudo-Labelled Clients (default {PSEUDO_WEIGHT}; real ones weigh 1)",
+    )
+    p.add_argument(
+        "--pseudo-min-payments", type=min_payments, metavar="N",
+        help=f"--pseudo: payments a stream needs for its Horizon payment to count (default {PSEUDO_MIN_PAYMENTS})",
+    )
     p.set_defaults(func=cmd_train)
 
     p = sub.add_parser("cv", parents=[common], help="stratified k-fold out-of-fold probabilities")
@@ -576,6 +718,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--with-selection", action="store_true", help="cross-validate over train plus the selection set")
     p.add_argument("--folds", type=int, default=CV_FOLDS)
     p.add_argument("--out", metavar="CSV", help="default: <root>/artifacts/oof/<model>.csv")
+    p.add_argument(
+        "--pseudo", type=pseudo_source, action="append", default=[], metavar="SPLIT[:YYYY-MM-DD]",
+        help="ranker only: also fit on this split's Clients Pseudo-Labelled at a Shifted Cutoff "
+        f"(default {SHIFTED_CUTOFF:%Y-%m-%d}); repeatable. They are never scored out of fold",
+    )
+    p.add_argument(
+        "--pseudo-weight", type=positive_weight, metavar="W",
+        help=f"--pseudo: sample weight of the Pseudo-Labelled Clients (default {PSEUDO_WEIGHT}; real ones weigh 1)",
+    )
+    p.add_argument(
+        "--pseudo-min-payments", type=min_payments, metavar="N",
+        help=f"--pseudo: payments a stream needs for its Horizon payment to count (default {PSEUDO_MIN_PAYMENTS})",
+    )
     p.set_defaults(func=cmd_cv)
 
     p = sub.add_parser(
@@ -621,6 +776,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "train" and args.model != "rules" and (args.ordering or args.param or args.none_gate):
         parser.error("--ordering, --param and --none-gate apply to --model rules only")
+    if args.command in ("train", "cv"):
+        if args.pseudo and args.model != "ranker":
+            parser.error("--pseudo applies to --model ranker only")
+        if not args.pseudo and (args.pseudo_weight is not None or args.pseudo_min_payments is not None):
+            parser.error("--pseudo-weight and --pseudo-min-payments apply to --pseudo only")
+        if len(set(args.pseudo)) < len(args.pseudo):
+            parser.error("give each Pseudo-Label source (split and Shifted Cutoff) once")
     if args.command == "pseudo-labels":
         if args.fidelity and args.min_payments is not None:
             parser.error("--fidelity chooses min_payments itself; give the settings to choose among with --candidates")
