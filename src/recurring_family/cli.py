@@ -17,7 +17,7 @@ from .cross_validation import CV_FOLDS, out_of_fold_proba
 from .evaluation import append_log, log_row, paired_bootstrap, previous_best, score
 from .fetch import fetch_data
 from .models import MODELS, predict_labels
-from .rules import DEFAULT_ORDERING, ORDERINGS
+from .rules import DEFAULT_NONE_GATE, DEFAULT_ORDERING, ORDERINGS
 from .streams import StreamParams, cached_streams
 from .submission import InvalidSubmission, read_submission, validate, write_submission
 
@@ -122,6 +122,17 @@ def stream_param(text: str) -> tuple[str, object]:
         raise argparse.ArgumentTypeError(f"bad value for {name}: {value!r}") from None
 
 
+def payment_count(text: str) -> int:
+    """A positive whole number of payments (the `none`-gate threshold)."""
+    try:
+        n = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a positive number of payments; got {text!r}") from None
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"expected a positive number of payments; got {text!r}")
+    return n
+
+
 def cmd_streams(args, paths: Paths) -> int:
     params = dataclasses.replace(StreamParams(), **dict(args.param))
     table, cached = cached_streams(paths.raw, args.split, paths.streams, params=params)
@@ -159,11 +170,11 @@ def _fitted_on(with_selection: bool) -> list[str]:
 
 
 def _new_model(args):
-    """A fresh model; the rule baseline takes its ordering rule and stream parameters from `train`."""
+    """A fresh model; the rule baseline takes its ordering rule, `none`-gate and stream parameters from `train`."""
     if args.model != "rules":
         return MODELS[args.model]()
     params = dataclasses.replace(StreamParams(), **dict(args.param))
-    return MODELS["rules"](ordering=args.ordering or DEFAULT_ORDERING, params=params)
+    return MODELS["rules"](ordering=args.ordering or DEFAULT_ORDERING, params=params, none_gate=args.none_gate)
 
 
 def cmd_train(args, paths: Paths) -> int:
@@ -305,7 +316,7 @@ def cmd_evaluate(args, paths: Paths) -> int:
     predicted.rename("predicted").to_csv(out, index_label="client_id")
 
     row = log_row(
-        scores, change=args.change, model=args.model + _decision_name(args.decision), split=split, conclusion=args.conclusion,
+        scores, change=args.change, model=args.model + getattr(model, "variant", "") + _decision_name(args.decision), split=split, conclusion=args.conclusion,
         row_type=row_type, run_id=run_id, comparison=comparison, diagnostics=diagnostics,
     )
     append_log(paths.log, row)
@@ -378,6 +389,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="rules only: override one stream detection parameter (repeatable)",
     )
     p.add_argument(
+        "--none-gate", type=payment_count, nargs="?", const=DEFAULT_NONE_GATE, metavar="N",
+        help=f"rules only: predict none when the Client's longest surviving stream has at most N payments "
+        f"(off unless given; N defaults to {DEFAULT_NONE_GATE})",
+    )
+    p.add_argument(
         "--decision", choices=("argmax", "tuned"), default="argmax",
         help="tuned: also fit the E3 decision layer on out-of-fold probabilities",
     )
@@ -432,8 +448,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.command == "train" and args.model != "rules" and (args.ordering or args.param):
-        parser.error("--ordering and --param apply to --model rules only")
+    if args.command == "train" and args.model != "rules" and (args.ordering or args.param or args.none_gate):
+        parser.error("--ordering, --param and --none-gate apply to --model rules only")
     paths = Paths(Path(args.root))
     try:
         return args.func(args, paths)

@@ -4,6 +4,10 @@ A stream *survives* when it is an Active Stream whose projected next payment fal
 Horizon. An ordering rule picks one surviving stream per Client (default: the one due soonest)
 and predicts its Merchant Family; a Client with no surviving stream gets `none`. Nothing is
 learned from the labels.
+
+The optional `none`-gate (the milestone-2 rule) also predicts `none` for a Client whose longest
+surviving stream has at most `none_gate` payments: short streams are mostly Clients who churn.
+It is off unless set; `DEFAULT_NONE_GATE` is the threshold the milestone-2 submission used.
 """
 
 import dataclasses
@@ -23,16 +27,29 @@ ORDERINGS = {
     "longest": ("n_payments", False),
 }
 DEFAULT_ORDERING = "soonest"
+DEFAULT_NONE_GATE = 4  # the milestone-2 submission's threshold
 
 
 class RulesModel:
     name = "rules"
 
-    def __init__(self, ordering: str = DEFAULT_ORDERING, params: StreamParams = StreamParams()):
+    def __init__(
+        self, ordering: str = DEFAULT_ORDERING, params: StreamParams = StreamParams(), none_gate: int | None = None
+    ):
         if ordering not in ORDERINGS:
             raise ValueError(f"unknown ordering {ordering!r}; expected one of {', '.join(ORDERINGS)}")
+        if none_gate is not None and (isinstance(none_gate, bool) or not isinstance(none_gate, int) or none_gate < 1):
+            raise ValueError(f"none_gate must be a positive number of payments or None (off), not {none_gate!r}")
         self.ordering = ordering
         self.params = params
+        self.none_gate = none_gate
+
+    @property
+    def variant(self) -> str:
+        """What the experiment log adds to the model name: the ordering rule and the gate when not default."""
+        return ("" if self.ordering == DEFAULT_ORDERING else f"+{self.ordering}") + (
+            "" if self.none_gate is None else f"+gate{self.none_gate}"
+        )
 
     def fit(self, transactions: pd.DataFrame, labels: pd.Series) -> "RulesModel":
         unknown = set(labels) - set(LABELS)
@@ -51,7 +68,11 @@ class RulesModel:
 
     def predict_proba(self, transactions: pd.DataFrame, clients: pd.Index) -> pd.DataFrame:
         index = pd.Index(clients, name="client_id")
-        picked = self.surviving_streams(transactions, index).groupby("client_id")["family"].first()
+        surviving = self.surviving_streams(transactions, index)
+        if self.none_gate is not None:
+            longest = surviving.groupby("client_id")["n_payments"].transform("max")
+            surviving = surviving[longest > self.none_gate]
+        picked = surviving.groupby("client_id")["family"].first()
         predicted = picked.reindex(index).astype(object).fillna(NONE_LABEL)
         onehot = (predicted.to_numpy()[:, None] == np.array(LABELS, dtype=object)[None, :]).astype(float)
         return pd.DataFrame(onehot, index=index, columns=list(LABELS))
@@ -59,7 +80,8 @@ class RulesModel:
     def diagnostics(self, transactions: pd.DataFrame, truth: pd.Series, predicted: pd.Series) -> dict[str, float]:
         """Over the Clients whose label is a Merchant Family: coverage is the share whose true family is
         among their surviving streams; selection accuracy is the share of those covered Clients for which
-        the rule picked the true family. NaN when there is nothing to divide by."""
+        the rule picked the true family. The `none`-gate removes no stream from coverage, so a covered
+        Client it gates to `none` counts against selection accuracy. NaN when there is nothing to divide by."""
         surviving = self.surviving_streams(transactions, truth.index)
         families = surviving.groupby("client_id")["family"].agg(set)
         with_family = truth[truth != NONE_LABEL]
@@ -74,11 +96,17 @@ class RulesModel:
         }
 
     def save(self, path: Path) -> None:
-        payload = {"model": self.name, "ordering": self.ordering, "params": dataclasses.asdict(self.params)}
+        payload = {
+            "model": self.name,
+            "ordering": self.ordering,
+            "none_gate": self.none_gate,
+            "params": dataclasses.asdict(self.params),
+        }
         Path(path).write_text(json.dumps(payload, indent=2))
 
     @classmethod
     def load(cls, path: Path) -> "RulesModel":
         payload = json.loads(Path(path).read_text())
         params = {k: tuple(v) if isinstance(v, list) else v for k, v in payload["params"].items()}
-        return cls(payload["ordering"], StreamParams(**params))
+        # models saved before the gate existed have no threshold: the gate is off
+        return cls(payload["ordering"], StreamParams(**params), payload.get("none_gate"))

@@ -213,3 +213,74 @@ def test_rules_options_are_refused_for_other_models(fetched, option):
 def test_unknown_ordering_is_refused(fetched):
     with pytest.raises(SystemExit):
         fetched.run("train", "--model", "rules", "--ordering", "alphabetical")
+
+
+# --- the none-gate ---------------------------------------------------------------
+
+
+GATE = {
+    # the only Active Stream has 3 payments: gated to none (3 <= 4)
+    "G_SHORT": payments("G_SHORT", "gym membership", "7997", 66.0, "2025-12-20", 3),
+    # the longest Active Stream has exactly 4 payments: still gated (at most N)
+    "G_FOUR": payments("G_FOUR", "cloud backup", "5732", 6.8, "2025-12-20", 4),
+    # the longest Active Stream has 5 payments: kept
+    "G_FIVE": payments("G_FIVE", "cloud backup", "5732", 6.8, "2025-12-20", 5),
+    # a short stream due soonest beside a long one: the gate looks at the longest, so the short one wins
+    "G_MIXED": payments("G_MIXED", "gym membership", "7997", 66.0, "2025-12-08", 3)
+    + payments("G_MIXED", "phone contract", "4814", 47.0, "2025-12-28", 6),
+}
+GATE_LABELS = {"G_SHORT": "gym", "G_FOUR": "cloud", "G_FIVE": "cloud", "G_MIXED": "gym", "G_NO_TX": "none"}
+
+
+@pytest.fixture
+def gate_train(fetched):
+    write_train(fetched, all_transactions(GATE), GATE_LABELS)
+    return fetched
+
+
+def test_none_gate_is_off_unless_set(gate_train):
+    row, predicted = evaluate_on_train(gate_train)
+    assert predicted == {"G_SHORT": "gym", "G_FOUR": "cloud", "G_FIVE": "cloud", "G_MIXED": "gym", "G_NO_TX": "none"}
+    assert row["model"] == "rules"
+
+
+def test_none_gate_defaults_to_four_payments(gate_train):
+    row, predicted = evaluate_on_train(gate_train, "--none-gate")
+    # a Client whose longest qualifying stream has at most 4 payments gets none
+    assert predicted == {"G_SHORT": "none", "G_FOUR": "none", "G_FIVE": "cloud", "G_MIXED": "gym", "G_NO_TX": "none"}
+    assert row["model"] == "rules+gate4"
+
+
+def test_none_gate_threshold_is_kept_with_the_trained_model(gate_train):
+    # evaluate reloads the saved model: the threshold set at train time must survive the round trip
+    row, predicted = evaluate_on_train(gate_train, "--none-gate", "2")
+    assert predicted == {"G_SHORT": "gym", "G_FOUR": "cloud", "G_FIVE": "cloud", "G_MIXED": "gym", "G_NO_TX": "none"}
+    assert row["model"] == "rules+gate2"
+    _, predicted = evaluate_on_train(gate_train, "--none-gate", "3")
+    assert (predicted["G_SHORT"], predicted["G_FOUR"]) == ("none", "cloud")
+
+
+def test_none_gate_applies_to_submissions(gate_train):
+    # fixture test Clients: C000004 has a streaming stream, C000008 a mobile stream (see above)
+    assert gate_train.run("train", "--model", "rules", "--none-gate", "100") == 0
+    assert gate_train.run("submit", "--model", "rules", "--name", "gated") == 0
+    sub = pd.read_csv(gate_train.root / "submissions" / "gated.csv", dtype=str)
+    assert set(sub["predicted_next_recurring_merchant"]) == {"none"}
+
+
+def test_none_gate_can_be_cross_validated_and_tuned(gate_train, capsys):
+    assert gate_train.run("train", "--model", "rules", "--none-gate", "--decision", "tuned", "--folds", "2") == 0
+    assert "decision layer tuned" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "four"])
+def test_invalid_none_gate_is_refused(fetched, value):
+    with pytest.raises(SystemExit):
+        fetched.run("train", "--model", "rules", "--none-gate", value)
+    assert not (fetched.root / "artifacts" / "rules.json").exists()
+
+
+def test_none_gate_is_refused_for_other_models(fetched):
+    with pytest.raises(SystemExit):
+        fetched.run("train", "--model", "prior", "--none-gate")
+    assert not (fetched.root / "artifacts" / "prior.json").exists()
