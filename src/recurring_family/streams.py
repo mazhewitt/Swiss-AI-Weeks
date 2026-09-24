@@ -25,7 +25,10 @@ names exactly one family, unlike an ambiguous description or a Filler Descriptio
 
 `pseudo_labels` gives each Client's Pseudo-Label at a Shifted Cutoff: the Merchant Family of the
 first Recurring Stream payment in its Horizon, or `none`. Streams for it are detected over the whole
-known history, so a stream that starts inside the Horizon counts once it has repeated.
+known history, so a stream that starts inside the Horizon counts once it has repeated. Its settings
+(`LabellerParams`) can make the task more like the real one: a minimum number of payments a stream
+needs before the Shifted Cutoff, and a share of Clients whose streams all stop at the Shifted Cutoff,
+as streams stop at the real Cutoff far more often than anywhere inside the known history.
 """
 
 from __future__ import annotations
@@ -422,35 +425,55 @@ def _summarise(client, family, times, amounts, n_refunds, cutoff, params) -> dic
 # --- Pseudo-Labels ------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class LabellerParams:
+    """The Pseudo-Label labeller's settings; the defaults label every repeating stream and churn no one."""
+
+    min_payments: int = 2  # payments a Recurring Stream needs in all for its Horizon payment to count
+    min_payments_before: int = 0  # of those, payments before the Shifted Cutoff (1: no stream new in the Horizon)
+    churn: float = 0.0  # share of Clients whose streams all stop at the Shifted Cutoff: they get `none`
+
+
 def pseudo_labels(
     transactions: pd.DataFrame,
     cutoff: pd.Timestamp = SHIFTED_CUTOFF,
     horizon: pd.Timedelta = HORIZON,
     min_payments: int = 2,
     params: StreamParams = StreamParams(),
+    min_payments_before: int = 0,
+    churn: float = 0.0,
 ) -> pd.Series:
     """Each Client's Pseudo-Label at `cutoff`, indexed by `client_id` (sorted), for every Client in
     `transactions`: the Merchant Family of its first payment in the Horizon (from `cutoff` up to, not
     including, `cutoff + horizon`) that belongs to a Recurring Stream of at least `min_payments`
-    payments, or `none`.
+    payments, `min_payments_before` of them before `cutoff`, or `none`.
 
     Streams are detected over the Client's whole known history, before and after `cutoff`, so a
-    stream that starts inside the Horizon counts once it has repeated. Decoy Transactions, shop
-    payments and refunds never join a stream; a one-off payment forms a stream too short to count;
-    a Filler Description that joins a stream takes that stream's family. A Horizon that ends after
-    the last observed day is refused: its Pseudo-Labels would come from a partly observed Horizon.
+    stream that starts inside the Horizon counts once it has repeated (unless `min_payments_before`
+    is 1 or more). Decoy Transactions, shop payments and refunds never join a stream; a one-off
+    payment forms a stream too short to count; a Filler Description that joins a stream takes that
+    stream's family. A Horizon that ends after the last observed day is refused: its Pseudo-Labels
+    would come from a partly observed Horizon.
+
+    `churn` is the share of Clients whose streams all stop at `cutoff`: they get `none` whatever they
+    paid in the Horizon. Streams inside the known history almost never stop, but at the real Cutoff
+    many do, so without churn the Pseudo-Label task has far fewer `none` Clients with live streams.
+    Which Clients churn is a fixed draw per Client and Shifted Cutoff (`_churn_draw`), so tables are
+    reproducible, a larger share churns a superset of Clients, and a Client pooled at two Shifted
+    Cutoffs churns at each independently.
     """
-    return pseudo_label_sweep(transactions, (min_payments,), cutoff, horizon, params)[min_payments]
+    labeller = LabellerParams(min_payments, min_payments_before, churn)
+    return pseudo_label_sweep(transactions, (labeller,), cutoff, horizon, params)[labeller]
 
 
 def pseudo_label_sweep(
     transactions: pd.DataFrame,
-    min_payments: tuple[int, ...],
+    settings: tuple[LabellerParams, ...],
     cutoff: pd.Timestamp = SHIFTED_CUTOFF,
     horizon: pd.Timedelta = HORIZON,
     params: StreamParams = StreamParams(),
-) -> dict[int, pd.Series]:
-    """`pseudo_labels` for several minimum-payments settings from one stream detection pass."""
+) -> dict[LabellerParams, pd.Series]:
+    """`pseudo_labels` for several labeller settings from one stream detection pass."""
     end = cutoff + horizon
     if end > HISTORY_END:
         last_day = (HISTORY_END - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
@@ -459,25 +482,42 @@ def pseudo_label_sweep(
             f"observed day ({last_day}), so its Pseudo-Labels would come from a partly observed Horizon; "
             f"the latest Shifted Cutoff is {HISTORY_END - horizon:%Y-%m-%d}"
         )
-    for m in min_payments:
-        if m < 2:
-            raise ValueError(f"min_payments must be at least 2 (a Recurring Stream repeats), got {m}")
+    for s in settings:
+        if s.min_payments < 2:
+            raise ValueError(f"min_payments must be at least 2 (a Recurring Stream repeats), got {s.min_payments}")
+        if s.min_payments_before < 0:
+            raise ValueError(f"min_payments_before must be 0 or more, got {s.min_payments_before}")
+        if not 0.0 <= s.churn < 1.0:
+            raise ValueError(f"churn must be a share of Clients from 0 up to 1, got {s.churn}")
 
     clients = pd.Index(sorted(transactions["client_id"].astype(str).unique()), dtype="string", name="client_id")
-    labels = {m: pd.Series(NONE_LABEL, index=clients, name=LABEL_COLUMN, dtype="string") for m in min_payments}
+    labels = {s: pd.Series(NONE_LABEL, index=clients, name=LABEL_COLUMN, dtype="string") for s in settings}
     for client, payments, rows, membership in _detect_per_client(transactions, HISTORY_END, params):
         family = np.array([r["family"] for r in rows] + [None], dtype=object)  # [-1] -> no stream
         counts = np.array([r["n_payments"] for r in rows] + [0])
         times = pd.DatetimeIndex(payments["timestamp"])
         in_horizon = (times >= cutoff) & (times < end)
-        for m, client_labels in labels.items():
-            counted = in_horizon & (counts[membership] >= m)
+        # each stream's payments before the Shifted Cutoff, and 0 for no stream
+        before = np.append(np.bincount(membership[(times < cutoff) & (membership >= 0)], minlength=len(rows)), 0)
+        draw = _churn_draw(client, cutoff)
+        for s, client_labels in labels.items():
+            if draw < s.churn:
+                continue  # the Client's streams all stop at the Shifted Cutoff
+            long_enough = (counts[membership] >= s.min_payments) & (before[membership] >= s.min_payments_before)
+            counted = in_horizon & long_enough
             if counted.any():
                 # the earliest counted payment; simultaneous payments of two families go to the first by name
                 idx = np.flatnonzero(counted)
                 first = idx[np.lexsort((family[membership[idx]].astype(str), times.asi8[idx]))[0]]
                 client_labels[client] = family[membership[first]]
     return labels
+
+
+def _churn_draw(client: str, cutoff: pd.Timestamp) -> float:
+    """A fixed draw in [0, 1) for a Client at a Shifted Cutoff, uniform over Clients: the Client churns
+    at that Cutoff under any churn share above it."""
+    digest = hashlib.sha1(f"{client}@{pd.Timestamp(cutoff).isoformat()}".encode()).digest()
+    return int.from_bytes(digest[:8], "big") / 2**64
 
 
 # --- per-split cache ----------------------------------------------------------
@@ -511,28 +551,28 @@ def cached_pseudo_labels(
     raw_dir: Path,
     split: str,
     cache_dir: Path,
-    min_payments: tuple[int, ...],
+    settings: tuple[LabellerParams, ...],
     cutoff: pd.Timestamp = SHIFTED_CUTOFF,
     params: StreamParams = StreamParams(),
     horizon: pd.Timedelta = HORIZON,
-) -> dict[int, tuple[pd.Series, bool]]:
-    """The split's Pseudo-Labels at `cutoff` for each minimum-payments setting, and whether each came
-    from the cache. Keyed like `cached_streams`, plus the Shifted Cutoff, the Horizon and the labeller
-    parameters; the settings not yet cached are labelled together in one stream detection pass.
+) -> dict[LabellerParams, tuple[pd.Series, bool]]:
+    """The split's Pseudo-Labels at `cutoff` for each labeller setting, and whether each came from the
+    cache. Keyed like `cached_streams`, plus the Shifted Cutoff, the Horizon and every labeller
+    setting; the settings not yet cached are labelled together in one stream detection pass.
     Reads transactions only, never a label file."""
     source_key = _source_key(raw_dir, split)
     paths = {
-        m: Path(cache_dir) / f"{split}-{source_key}-{_digest((str(cutoff), str(horizon), m, params))}.pkl"
-        for m in min_payments
+        s: Path(cache_dir) / f"{split}-{source_key}-{_digest((str(cutoff), str(horizon), s, params))}.pkl"
+        for s in settings
     }
-    result = {m: (pd.read_pickle(path), True) for m, path in paths.items() if path.exists()}
-    missing = tuple(m for m in paths if m not in result)
+    result = {s: (pd.read_pickle(path), True) for s, path in paths.items() if path.exists()}
+    missing = tuple(s for s in paths if s not in result)
     if missing:
         labelled = pseudo_label_sweep(data.load_transactions(raw_dir, split), missing, cutoff, horizon, params)
-        for m, labels in labelled.items():
-            _store(labels, paths[m], split, source_key)
-            result[m] = (labels, False)
-    return {m: result[m] for m in min_payments}
+        for s, labels in labelled.items():
+            _store(labels, paths[s], split, source_key)
+            result[s] = (labels, False)
+    return {s: result[s] for s in settings}
 
 
 def _source_key(raw_dir: Path, split: str) -> str:
