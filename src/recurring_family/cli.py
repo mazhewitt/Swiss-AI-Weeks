@@ -11,6 +11,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import data
+from . import decision as decision_layer
 from .config import LABEL_COLUMN, LABELS, MERCHANT_FAMILIES
 from .cross_validation import CV_FOLDS, out_of_fold_proba
 from .evaluation import append_log, log_row, paired_bootstrap, previous_best, score
@@ -42,6 +43,9 @@ class Paths:
     def model_meta(self, name: str) -> Path:
         return self.artifacts / f"{name}.meta.json"
 
+    def decision(self, name: str) -> Path:
+        return self.artifacts / f"{name}.decision.json"
+
     def run_predictions(self, run_id: str) -> Path:
         return self.runs / f"{run_id}.csv"
 
@@ -55,6 +59,28 @@ def _load_model(paths: Paths, name: str):
     if not path.exists():
         raise FileNotFoundError(f"no trained {name!r} model at {path}; run `train --model {name}` first")
     return MODELS[name].load(path)
+
+
+def _load_decision(paths: Paths, model: str, choice: str) -> decision_layer.Decision | None:
+    """None for plain argmax; the decision fitted by `train --decision tuned`; or a hand-set
+    decision layer (weights and none_threshold) from a JSON file."""
+    if choice == "argmax":
+        return None
+    path = paths.decision(model) if choice == "tuned" else Path(choice)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"no tuned decision layer for {model!r} at {path}; run `train --model {model} --decision tuned` first"
+            if choice == "tuned" else f"no decision layer file at {path}"
+        )
+    return decision_layer.Decision.load(path)
+
+
+def _decide(proba: pd.DataFrame, decision: decision_layer.Decision | None) -> pd.Series:
+    return predict_labels(proba) if decision is None else decision.apply(proba)
+
+
+def _decision_name(choice: str) -> str:
+    return "" if choice == "argmax" else "+tuned" if choice == "tuned" else f"+{Path(choice).stem}"
 
 
 def cmd_fetch_data(args, paths: Paths) -> int:
@@ -135,6 +161,10 @@ def cmd_train(args, paths: Paths) -> int:
     with data.training_run(with_selection=args.with_selection):
         transactions, labels = _training_data(paths, args.with_selection)
         model = MODELS[args.model]().fit(transactions, labels)
+        if args.decision == "tuned":
+            # fitted on out-of-fold probabilities of the training Clients only
+            oof = out_of_fold_proba(MODELS[args.model], transactions, labels, folds=args.folds)
+            decision, fit_scores = decision_layer.fit(oof[list(LABELS)], labels)
     paths.artifacts.mkdir(parents=True, exist_ok=True)
     model.save(paths.model(args.model))
     paths.model_meta(args.model).write_text(json.dumps({"fitted_on": _fitted_on(args.with_selection)}))
@@ -142,6 +172,20 @@ def cmd_train(args, paths: Paths) -> int:
         f"train: {args.model} fitted on {len(labels)} Clients ({' + '.join(_fitted_on(args.with_selection))})"
         f" -> {paths.model(args.model)}"
     )
+    if args.decision == "tuned":
+        decision.save(paths.decision(args.model))
+        print(
+            f"  decision layer tuned on {args.folds}-fold out-of-fold probabilities: macro-F1 "
+            f"{fit_scores['argmax_macro_f1']:.4f} (argmax) -> {fit_scores['tuned_macro_f1']:.4f} (tuned)"
+            f" -> {paths.decision(args.model)}"
+        )
+        threshold = decision.none_threshold
+        print(
+            "  weights " + ", ".join(f"{label} {w:.2f}" for label, w in decision.weights.items())
+            + f"; none threshold {'off' if threshold is None else f'{threshold:.2f}'}"
+        )
+    else:
+        paths.decision(args.model).unlink(missing_ok=True)  # it belonged to the replaced model
     return 0
 
 
@@ -197,13 +241,21 @@ def cmd_evaluate(args, paths: Paths) -> int:
             f"{args.model} was fitted on {' + '.join(fitted_on)}; scoring it on the selection set is not honest"
         )
     clients = _scored_clients(paths, split)
+    decision = _load_decision(paths, args.model, args.decision)
+    if decision is not None:
+        overlap = set(decision.fitted_on_clients) & set(clients)
+        if overlap:
+            raise data.DataError(
+                f"the decision layer was fitted on {len(overlap)} of the {len(clients)} {split} Clients it would "
+                "be scored on; score it on Clients outside its fitting data"
+            )
     transactions = data.load_transactions(paths.raw, "train" if split == "train" else "valid")
     with data.predicting():
         proba = model.predict_proba(transactions, clients)
     # only now, with the predictions made, read the labels they are scored against
     with data.checkpoint() if args.checkpoint else data.scoring():
         labels = data.load_labels(paths.raw, split).set_index("client_id")[LABEL_COLUMN]
-    predicted = predict_labels(proba).reindex(labels.index)
+    predicted = _decide(proba, decision).reindex(labels.index)
     scores = score(labels, predicted)
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:6]
@@ -220,7 +272,7 @@ def cmd_evaluate(args, paths: Paths) -> int:
     predicted.rename("predicted").to_csv(out, index_label="client_id")
 
     row = log_row(
-        scores, change=args.change, model=args.model, split=split, conclusion=args.conclusion,
+        scores, change=args.change, model=args.model + _decision_name(args.decision), split=split, conclusion=args.conclusion,
         row_type=row_type, run_id=run_id, comparison=comparison,
     )
     append_log(paths.log, row)
@@ -245,8 +297,9 @@ def cmd_submit(args, paths: Paths) -> int:
         print(f"submit: {args.check} is valid")
         return 0
     model = _load_model(paths, args.model)
+    decision = _load_decision(paths, args.model, args.decision)
     transactions = data.load_transactions(paths.raw, "test")
-    predicted = predict_labels(model.predict_proba(transactions, expected))
+    predicted = _decide(model.predict_proba(transactions, expected), decision)
     out = paths.submissions / f"{args.name}.csv"
     write_submission(predicted, expected, out)
     print(f"submit: wrote {out} ({len(expected)} Clients)")
@@ -278,6 +331,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("train", parents=[common], help="fit a model on the train Clients")
     p.add_argument("--model", choices=sorted(MODELS), required=True)
     p.add_argument("--with-selection", action="store_true", help="also fit on the valid selection set (submission refit)")
+    p.add_argument(
+        "--decision", choices=("argmax", "tuned"), default="argmax",
+        help="tuned: also fit the E3 decision layer on out-of-fold probabilities",
+    )
+    p.add_argument("--folds", type=int, default=CV_FOLDS, help="folds for the tuned decision layer's out-of-fold fit")
     p.set_defaults(func=cmd_train)
 
     p = sub.add_parser("cv", parents=[common], help="stratified k-fold out-of-fold probabilities")
@@ -297,6 +355,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--change", default="", help="what changed in this run")
     p.add_argument("--conclusion", default="", help="what the run tells us")
     p.add_argument("--proba", metavar="CSV", help="also write per-Client label probabilities to this CSV")
+    p.add_argument(
+        "--decision", default="argmax", metavar="argmax|tuned|JSON",
+        help="argmax (default); tuned: the decision layer fitted by `train --decision tuned`; "
+        "or a JSON file with hand-set weights and none_threshold",
+    )
     p.set_defaults(func=cmd_evaluate)
 
     p = sub.add_parser("submit", parents=[common], help="write or check a submission CSV")
@@ -304,6 +367,11 @@ def build_parser() -> argparse.ArgumentParser:
     group.add_argument("--model", choices=sorted(MODELS))
     group.add_argument("--check", metavar="CSV", help="validate an existing submission file")
     p.add_argument("--name", default="submission", help="file name under submissions/ (without .csv)")
+    p.add_argument(
+        "--decision", default="argmax", metavar="argmax|tuned|JSON",
+        help="argmax (default); tuned: the decision layer fitted by `train --decision tuned`; "
+        "or a JSON file with hand-set weights and none_threshold",
+    )
     p.set_defaults(func=cmd_submit)
     return parser
 
