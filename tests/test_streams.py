@@ -993,3 +993,18 @@ def test_inputs_at_a_shifted_cutoff_use_only_the_transactions_before_it():
     # C1's gym and C2's insurance are Active Streams due inside the Horizon: the rule predicts from them
     predicted = expected_proba.idxmax(axis=1).to_dict()
     assert predicted["C1"] == "gym" and predicted["C2"] == "insurance"
+
+
+def test_a_rule_saved_at_a_shifted_cutoff_reloads_at_that_cutoff(tmp_path):
+    from recurring_family.pseudo import milestone2_rule
+    from recurring_family.rules import RulesModel
+
+    # insurance every month from January, stopping in September: due inside the Shifted Cutoff's
+    # Horizon, long overdue at the real Cutoff
+    base = history(series("C1", "insurance monthly", "6300", 109, "2025-01-10", 9))
+    clients = pd.Index(["C1"], name="client_id")
+    rule = milestone2_rule(SHIFTED)
+    rule.save(tmp_path / "rule.json")
+    loaded = RulesModel.load(tmp_path / "rule.json")
+    assert loaded.predict_proba(base, clients).idxmax(axis=1).to_dict() == {"C1": "insurance"}
+    assert milestone2_rule().predict_proba(base, clients).idxmax(axis=1).to_dict() == {"C1": "none"}
