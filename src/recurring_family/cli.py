@@ -4,7 +4,6 @@ import argparse
 import json
 import sys
 import uuid
-from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -161,6 +160,15 @@ def _best_predictions(paths: Paths, best: dict, clients: pd.Index) -> pd.Series:
     return old.reindex(clients)
 
 
+def _scored_clients(paths: Paths, split: str) -> pd.Index:
+    """The Clients an evaluation scores, known without reading any valid labels."""
+    if split == "train":
+        ids = data.load_labels(paths.raw, "train")["client_id"]
+    else:
+        ids = data.valid_split(paths.raw).query("set == @split")["client_id"]
+    return pd.Index(ids, name="client_id")
+
+
 def cmd_evaluate(args, paths: Paths) -> int:
     model = _load_model(paths, args.model)
     split = "holdout" if args.checkpoint else args.split
@@ -171,10 +179,13 @@ def cmd_evaluate(args, paths: Paths) -> int:
         raise data.DataError(
             f"{args.model} was fitted on {' + '.join(fitted_on)}; scoring it on the selection set is not honest"
         )
-    with data.checkpoint() if args.checkpoint else nullcontext():
+    clients = _scored_clients(paths, split)
+    transactions = data.load_transactions(paths.raw, "train" if split == "train" else "valid")
+    with data.predicting():
+        proba = model.predict_proba(transactions, clients)
+    # only now, with the predictions made, read the labels they are scored against
+    with data.checkpoint() if args.checkpoint else data.scoring():
         labels = data.load_labels(paths.raw, split).set_index("client_id")[LABEL_COLUMN]
-        transactions = data.load_transactions(paths.raw, "train" if split == "train" else "valid")
-        proba = model.predict_proba(transactions, labels.index)
     predicted = predict_labels(proba).reindex(labels.index)
     scores = score(labels, predicted)
 

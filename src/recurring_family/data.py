@@ -67,11 +67,12 @@ class LabelLeak(DataError):
 
 @dataclass(frozen=True)
 class _LabelPolicy:
-    training: bool = False
-    selection: bool = True
+    stage: str = "outside"  # outside | training | predicting | scoring
+    selection: bool = False
     holdout: bool = False
 
 
+# Outside a scoring step no valid labels may be read at all.
 _POLICY: ContextVar[_LabelPolicy] = ContextVar("label_policy", default=_LabelPolicy())
 
 
@@ -86,27 +87,48 @@ def _policy(policy: _LabelPolicy):
 
 def training_run(*, with_selection: bool = False):
     """Inside a training run valid labels are off limits, except the selection set when refitting."""
-    return _policy(_LabelPolicy(training=True, selection=with_selection, holdout=False))
+    return _policy(_LabelPolicy(stage="training", selection=with_selection, holdout=False))
+
+
+def predicting():
+    """While a model predicts, no valid labels may be read: it could fake the score it is about to get."""
+    return _policy(_LabelPolicy(stage="predicting", selection=False, holdout=False))
+
+
+def scoring():
+    """Evaluate's scoring step, after predictions are made: the selection set's labels may be read."""
+    return _policy(_LabelPolicy(stage="scoring", selection=True, holdout=False))
 
 
 def checkpoint():
-    """The human-started checkpoint: the only place sealed-holdout labels may be read."""
-    return _policy(_LabelPolicy(training=False, selection=True, holdout=True))
+    """The human-started checkpoint's scoring step: the only place sealed-holdout labels may be read."""
+    return _policy(_LabelPolicy(stage="scoring", selection=True, holdout=True))
 
 
 def _guard_label_read(source: str) -> None:
     if source == "train":
         return
     policy = _POLICY.get()
-    if policy.training and (source != "selection" or not policy.selection):
+    if policy.stage == "training" and (source != "selection" or not policy.selection):
         raise LabelLeak(
             f"a training run tried to read valid labels ({source}); training uses train labels only"
             + ("" if source != "selection" else " (pass --with-selection to refit on train plus the selection set)")
+        )
+    if policy.stage == "predicting":
+        raise LabelLeak(
+            f"reading {source} labels while a model predicts would let it fake its score"
+            + (" and expose the sealed holdout" if source in ("holdout", "valid") else "")
+            + "; evaluate reads the labels it scores against only after the predictions are made"
         )
     if source in ("holdout", "valid") and not policy.holdout:
         raise LabelLeak(
             f"reading {source} labels would expose the sealed holdout; "
             "sealed holdout labels are read only in checkpoint mode (evaluate --checkpoint)"
+        )
+    if source == "selection" and not policy.selection:
+        raise LabelLeak(
+            "reading selection labels is allowed only in evaluate's scoring step "
+            "(or a refit with --with-selection)"
         )
 
 
@@ -143,8 +165,9 @@ def load_labels(raw_dir: Path, split: str) -> pd.DataFrame:
     """Columns: client_id, cutoff_date (UTC), target_next_recurring_merchant.
 
     `split` is train, valid (all of it), or one of the valid sets: selection or holdout.
-    Guarded: no valid labels inside a training run (bar the selection set when refitting),
-    and no holdout labels (hence no full valid) outside checkpoint mode.
+    Guarded: no valid labels inside a training run (bar the selection set when refitting)
+    or while a model predicts; selection labels only in a scoring step, and holdout labels
+    (hence full valid) only in checkpoint mode's scoring step.
     """
     _check_split(split, LABEL_SOURCES)
     _guard_label_read(split)

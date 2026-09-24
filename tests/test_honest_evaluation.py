@@ -160,6 +160,57 @@ def test_reading_holdout_labels_outside_checkpoint_fails_loudly(fetched, monkeyp
     assert not fetched.log.exists()
 
 
+class LabelCheater(models.PriorModel):
+    """Answers with the true label of every Client whose valid labels it can read while predicting."""
+
+    name = "cheater"
+
+    def predict_proba(self, transactions, clients):
+        truth = data.load_labels(self.raw, self.source).set_index("client_id")["target_next_recurring_merchant"]
+        rows = [[1.0 if truth.get(c, "none") == l else 0.0 for l in LABELS] for c in clients]
+        return pd.DataFrame(rows, index=pd.Index(clients, name="client_id"), columns=LABELS)
+
+
+@pytest.mark.parametrize(
+    ("source", "mode"),
+    [
+        ("holdout", ["--checkpoint"]),
+        ("valid", ["--checkpoint"]),
+        ("selection", ["--checkpoint"]),
+        ("selection", []),
+        ("selection", ["--split", "train"]),
+    ],
+)
+def test_a_model_never_reads_valid_labels_while_predicting(fetched, monkeypatch, capsys, source, mode):
+    # Only the scoring step, after predictions are made, may read the labels it scores against;
+    # otherwise a model could fake a perfect selection or sealed-holdout score.
+    big_valid(fetched)
+    monkeypatch.setattr(LabelCheater, "raw", fetched.raw, raising=False)
+    monkeypatch.setattr(LabelCheater, "source", source, raising=False)
+    monkeypatch.setitem(models.MODELS, "cheater", LabelCheater)
+    assert fetched.run("train", "--model", "cheater") == 0
+    capsys.readouterr()
+    assert fetched.run("evaluate", "--model", "cheater", *mode) != 0
+    err = capsys.readouterr().err
+    assert f"reading {source} labels" in err and "predict" in err
+    assert not fetched.log.exists()
+    assert not (fetched.root / "experiments" / "runs").exists()
+
+
+@pytest.mark.parametrize("source", ["selection", "holdout"])
+def test_a_submission_model_never_reads_valid_labels_while_predicting(fetched, monkeypatch, capsys, source):
+    # Outside evaluate's scoring step no valid labels are readable, not only inside evaluate.
+    big_valid(fetched)
+    monkeypatch.setattr(LabelCheater, "raw", fetched.raw, raising=False)
+    monkeypatch.setattr(LabelCheater, "source", source, raising=False)
+    monkeypatch.setitem(models.MODELS, "cheater", LabelCheater)
+    assert fetched.run("train", "--model", "cheater") == 0
+    capsys.readouterr()
+    assert fetched.run("submit", "--model", "cheater", "--name", "cheat") != 0
+    assert f"reading {source} labels" in capsys.readouterr().err
+    assert not (fetched.root / "submissions" / "cheat.csv").exists()
+
+
 @pytest.mark.parametrize("split", ["holdout", "valid"])
 def test_evaluate_refuses_holdout_or_all_of_valid_without_checkpoint(fetched, split):
     assert fetched.run("train", "--model", "prior") == 0
