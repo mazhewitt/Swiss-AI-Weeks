@@ -23,12 +23,42 @@ Features: only from the stream table and from the member payments and matched re
 
 **Blocked by:** 03, 05
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `--none-model` works in `train`, `cv`, `evaluate` and `submit` (and `--decision tuned`). Save then load gives identical probabilities. Rows sum to 1. The log's model column names it (e.g. `ranker+none+pseudo+tuned`)
-- [ ] Without `--none-model`, every existing output is byte-identical (ranker, blend, rules, the Day-2 noon upload script)
-- [ ] Pseudo-Labelled Clients never reach the `none` model's fit (a test proves it). No label of a scored Client reaches its own features
-- [ ] Every new feature is computed from stream member payments, matched refunds or the stream table only (a test: injecting Decoy Transactions leaves the `none` model's features unchanged)
-- [ ] Train out-of-fold comparison with the Pseudo-Label settings of run `20260924T171108-3251a4` (train+unlabeled at 2025-10-03, weight 0.5, min_payments 4): argmax, tuned and nested tuned macro-F1 for the baseline, group A only, and A+B. Recorded in the ticket
-- [ ] Only if the best variant beats the baseline's nested tuned macro-F1 by at least 0.01 on train: one run is logged on the selection set (`--decision tuned`, paired bootstrap against `20260924T171108-3251a4`), and the predictions are committed
-- [ ] The full fast test suite passes
+- [x] `--none-model` works in `train`, `cv`, `evaluate` and `submit` (and `--decision tuned`). Save then load gives identical probabilities. Rows sum to 1. The log's model column names it (e.g. `ranker+none+pseudo+tuned`)
+- [x] Without `--none-model`, every existing output is byte-identical (ranker, blend, rules, the Day-2 noon upload script)
+- [x] Pseudo-Labelled Clients never reach the `none` model's fit (a test proves it). No label of a scored Client reaches its own features
+- [x] Every new feature is computed from stream member payments, matched refunds or the stream table only (a test: injecting Decoy Transactions leaves the `none` model's features unchanged)
+- [x] Train out-of-fold comparison with the Pseudo-Label settings of run `20260924T171108-3251a4` (train+unlabeled at 2025-10-03, weight 0.5, min_payments 4): argmax, tuned and nested tuned macro-F1 for the baseline, group A only, and A+B. Recorded in the ticket
+- [x] Only if the best variant beats the baseline's nested tuned macro-F1 by at least 0.01 on train: one run is logged on the selection set (`--decision tuned`, paired bootstrap against `20260924T171108-3251a4`), and the predictions are committed
+- [x] The full fast test suite passes
+
+## Outcome
+
+- `train` and `cv --model ranker --none-model` fit the `none` model (`src/recurring_family/none_model.py`) beside the ranker; `evaluate` and `submit` load it with the saved model. The features: group A (29: the soonest-due Active Stream's value, min and max of the candidate fields, plus stream counts), group B (75: churn signals from member payments and matched refunds, `n_ended`, `past_churn_rate`, `n_ended_recent120`, activity ratios, `active_has_<family>` and so on) and `ranker_none`, cross-fitted in 5 folds over the training Clients. `detect_stream_payments` exposes the member payments and which of them a matched refund reverses; the stream table is unchanged (identical on train, valid, test and unlabeled), and `bash scripts/day2_noon_ranker_pseudo.sh` reproduces `submissions/day2_noon_ranker_pseudo.csv` byte for byte.
+- The features match the analysis's `features.py` on train except where intended: the soonest-due stream's value is that stream's own (the analysis's `groupby().first()` skipped missing values), and the refund features use matched refunds, not raw refunds within 7 days.
+- Train out-of-fold (`scripts/none_model_variants.py`, `experiments/none_model_variants.csv`), Pseudo-Label settings of `20260924T171108-3251a4`, 2,000 Clients; nested = decision fitted on 4 folds, applied to the 5th:
+
+| Variant | argmax | tuned | nested tuned | nested gain |
+|---|---|---|---|---|
+| Baseline ranker with Pseudo-Labels | 0.5485 | 0.5819 | 0.5699 | |
+| A | 0.5925 | 0.5980 | 0.5761 | +0.006 |
+| A + `ranker_none` | 0.6053 | 0.6106 | 0.5958 | +0.026 |
+| A+B | 0.6137 | 0.6206 | 0.6033 | +0.033 |
+| **A+B + `ranker_none`** (chosen) | 0.6154 | 0.6192 | **0.6095** | **+0.040** |
+
+  Fitting and applying the model to Active-Stream Clients only is worse for every feature set (nested 0.592 to 0.597). No point of a small grid (15 leaves, min_child 60, 400 trees, lr 0.05 with 300 trees) beat the analysis's hyperparameters (best 0.6079). `rf cv --none-model` gives exactly the script's out-of-fold rows for the chosen setup.
+- The train gate (+0.01) was met, so one selection run was logged: `20260924T225229-cc7243` (`ranker+none+pseudo+tuned`), macro-F1 0.5764 against 0.5735 for `20260924T171108-3251a4`: delta +0.0029 (95% -0.0221 .. +0.0267), a tie. `none` F1 rises 0.6233 -> 0.6616, but music (0.4793 -> 0.4511) and software (0.5037 -> 0.4769) fall. The +0.040 on train does not carry over. One possible reason, not checked: the analysis that motivated the ticket and the feature set were both made on the same train Clients.
+- Candidate only: `scripts/day2_final_ranker_none.sh` refits on train plus the selection set and writes `submissions/day2_final_ranker_none.csv` (valid; 85% agreement with the Day-2 12:00 upload; none 286, insurance 121, gym 107, mobile 107, cloud 106, streaming 96, music 92, software 85). Humans decide whether to upload it.
+
+## Review (three critics; merged)
+
+No leakage, no broken caller, and the defaults are byte-identical. The merged tree reproduces both `submissions/day2_noon_ranker_pseudo.csv` and `submissions/day2_final_ranker_none.csv` byte for byte.
+
+- **Why the train gain didn't carry over (checked, label-free).** The churn features shift between splits. A classifier telling train Clients from valid Clients reaches AUC 0.60 on group A features and 0.73 on group B. Against test it reaches 0.69 and 0.80. `max_missed_rate` averages 0.069 in train, 0.129 in valid and 0.167 in test. `n_ended` falls from 0.58 to 0.30 and `n_short` rises from 1.14 to 1.48. This fits the Filler Description shift, which breaks streams apart. Test drifts more than valid, so the candidate file may do worse on test than on selection. Ticket 11 goes after the cause.
+- **The +0.040 is optimistic.** It is the best of 17 variants on the same out-of-fold rows, and the features came from an analysis of the same train Clients.
+- **Follow-ups:**
+  - a one-class `none` training set gives a constant P(`none`);
+  - `rf cv --none-model` overwrites `artifacts/oof/ranker.csv`, and `artifacts/ranker.json` is shared between setups;
+  - the `none` model without Pseudo-Labels scores 0.6282 argmax on train out-of-fold (untested with nested tuning);
+  - same-day repeated payments crash `_summarise`, which predates this ticket.

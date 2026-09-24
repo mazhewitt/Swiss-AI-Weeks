@@ -9,7 +9,7 @@ from recurring_family.streams import _detect_per_client, StreamParams, _evidence
 OUT = Path(__file__).parent
 def profile(tx, name):
     rows, orphan_rows = [], []
-    for client, pays, srows, membership in _detect_per_client(tx, CUTOFF, StreamParams()):
+    for client, pays, srows, membership, _ in _detect_per_client(tx, CUTOFF, StreamParams()):
         rows.extend(srows)
         kinds = np.array([_evidence(d, m)[0] for d, m in zip(pays.description, pays.mcc)])
         o = pays[(kinds != "drop") & (membership < 0)]

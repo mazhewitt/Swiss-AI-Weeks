@@ -15,7 +15,7 @@ with data.training_run():
     tx = data.load_transactions(RAW, "train")
 t0 = time.time()
 streams, members = [], []
-for client, pays, rows, membership in _detect_per_client(tx, CUTOFF, StreamParams()):
+for client, pays, rows, membership, _ in _detect_per_client(tx, CUTOFF, StreamParams()):
     ts = pays["timestamp"].to_numpy(); am = pays["amount"].to_numpy(float); ds = pays["description"].astype(str).to_numpy()
     for r in rows:
         streams.append(r)

@@ -15,7 +15,7 @@ FILLERS = np.array(["member plan", "subscription charge", "digital service"])
 TOL = 0.06
 def marker(t):
     rows, fams = [], []
-    for client, pays, srows, membership in _detect_per_client(t, CUTOFF, StreamParams()):
+    for client, pays, srows, membership, _ in _detect_per_client(t, CUTOFF, StreamParams()):
         live = [r for r in srows if r["active"]]
         fams.extend(r["family_description_share"] for r in live)
         kinds = np.array([_evidence(d, m)[0] for d, m in zip(pays.description, pays.mcc)])

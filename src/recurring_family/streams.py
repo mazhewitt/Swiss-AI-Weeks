@@ -18,6 +18,8 @@ the rest form streams that are split into music or streaming by amount.
 
 A refund is credited to a stream only when it reverses one of the stream's payments: a payment
 of matching amount made shortly before it. Each payment is reversed at most once.
+`detect_stream_payments` also returns every stream's member payments, each marked when a matched
+refund reverses it.
 
 Each stream also reports its most common MCC and description (words lower-cased, abbreviations
 expanded) and the share of its payments whose description is family-specific: a family keyword
@@ -104,6 +106,8 @@ COLUMNS = [
     "family_description_share",
 ]
 
+PAYMENT_COLUMNS = ["client_id", "stream_id", "timestamp", "amount", "refunded"]
+
 
 @dataclass(frozen=True)
 class StreamParams:
@@ -180,9 +184,47 @@ def detect_streams(
     params: StreamParams = StreamParams(),
 ) -> pd.DataFrame:
     """One row per Recurring Stream, for every Client in `transactions` (columns: `COLUMNS`)."""
-    rows = []
-    for _, _, client_rows, _ in _detect_per_client(transactions, cutoff, params):
+    return detect_stream_payments(transactions, cutoff, params)[0]
+
+
+def detect_stream_payments(
+    transactions: pd.DataFrame,
+    cutoff: pd.Timestamp = CUTOFF,
+    params: StreamParams = StreamParams(),
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """The stream table of `detect_streams`, and its streams' member payments: one row per payment that
+    belongs to a Recurring Stream (columns: `PAYMENT_COLUMNS`), ordered by Client, stream, time and
+    amount. `refunded` marks a payment that a refund credited to its stream reverses."""
+    rows, paid = [], []
+    for client, payments, client_rows, membership, reversed_ in _detect_per_client(transactions, cutoff, params):
         rows.extend(client_rows)
+        members = np.flatnonzero(membership >= 0)
+        paid.append(
+            pd.DataFrame(
+                {
+                    "client_id": client,
+                    "stream_id": membership[members],
+                    "timestamp": payments["timestamp"].to_numpy()[members],
+                    "amount": payments["amount"].to_numpy(dtype=float)[members],
+                    "refunded": reversed_[members],
+                }
+            )
+        )
+    return _stream_table(rows), _payment_table(paid)
+
+
+def _payment_table(parts: list[pd.DataFrame]) -> pd.DataFrame:
+    table = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=PAYMENT_COLUMNS)
+    table["timestamp"] = pd.to_datetime(table["timestamp"], utc=True)
+    table = table.astype({"client_id": "string", "stream_id": "int64", "amount": "float64", "refunded": "bool"})
+    return (
+        table[PAYMENT_COLUMNS]
+        .sort_values(["client_id", "stream_id", "timestamp", "amount"], kind="stable")
+        .reset_index(drop=True)
+    )
+
+
+def _stream_table(rows: list[dict]) -> pd.DataFrame:
     table = pd.DataFrame(rows, columns=COLUMNS)
     for column in ("first_payment", "last_payment", "next_payment"):
         # a column of NaT only (every stream a single payment) is inferred timezone-naive
@@ -211,15 +253,16 @@ def detect_streams(
 
 
 def _detect_per_client(transactions, cutoff, params):
-    """Per Client with a payment before `cutoff`: (client, payments, stream rows, membership), where
-    membership gives each payment's `stream_id`, or -1 for a payment in no stream."""
+    """Per Client with a payment before `cutoff`: (client, payments, stream rows, membership, reversed),
+    where membership gives each payment's `stream_id`, or -1 for a payment in no stream, and reversed
+    marks each payment that a refund credited to its stream reverses."""
     tx = transactions[transactions["timestamp"] < cutoff]
     payments = tx[(tx["type"] == "card_payment") & (tx["direction"] == "out")]
     refunds = tx[(tx["type"] == "refund") & (tx["direction"] == "in")]
     for client, group in payments.groupby("client_id", sort=True):
         client_refunds = refunds[refunds["client_id"] == client]
-        rows, membership = _client_streams(str(client), group, client_refunds, cutoff, params)
-        yield str(client), group, rows, membership
+        rows, membership, reversed_ = _client_streams(str(client), group, client_refunds, cutoff, params)
+        yield str(client), group, rows, membership, reversed_
 
 
 def _client_streams(client, payments, refunds, cutoff, params):
@@ -315,7 +358,7 @@ def _client_streams(client, payments, refunds, cutoff, params):
             stream_of[i] = fit(log_amount[i], _group_choices(families[i] | ({home} if home else set()), hints[i]))
 
     ns = pd.DatetimeIndex(payments["timestamp"]).as_unit("ns").asi8
-    refund_counts = _match_refunds(refunds, stream_of, [g for g, _, _ in streams], ns, log_amount, params)
+    refund_counts, reversed_ = _match_refunds(refunds, stream_of, [g for g, _, _ in streams], ns, log_amount, params)
 
     times = payments["timestamp"].to_numpy()
     amounts = payments["amount"].to_numpy(dtype=float)
@@ -340,7 +383,7 @@ def _client_streams(client, payments, refunds, cutoff, params):
     for n, (r, s) in enumerate(out):
         r["stream_id"] = n
         membership[stream_of == s] = n
-    return [r for r, _ in out], membership
+    return [r for r, _ in out], membership, reversed_
 
 
 def _most_common(values) -> str:
@@ -349,12 +392,15 @@ def _most_common(values) -> str:
     return str(min(counts[counts == counts.max()].index))
 
 
-def _match_refunds(refunds, stream_of, stream_groups, payment_ns, log_amount, params) -> np.ndarray:
-    """Refunds credited per stream. A refund reverses one not-yet-refunded payment that sits in a stream
-    its description allows, precedes it by at most the refund window and matches its amount; of
-    several, the closest in amount, then the latest."""
+def _match_refunds(
+    refunds, stream_of, stream_groups, payment_ns, log_amount, params
+) -> tuple[np.ndarray, np.ndarray]:
+    """Refunds credited per stream, and which payments they reverse. A refund reverses one
+    not-yet-refunded payment that sits in a stream its description allows, precedes it by at most the
+    refund window and matches its amount; of several, the closest in amount, then the latest."""
     counts = np.zeros(len(stream_groups), dtype=int)
     refunded = stream_of < 0  # payments outside every stream can never be reversed
+    reversed_ = np.zeros(len(stream_of), dtype=bool)
     groups = np.array([stream_groups[s] if s >= 0 else None for s in stream_of], dtype=object)
     window = int(pd.Timedelta(days=params.refund_window_days).value)
     refunds = refunds.sort_values(["timestamp", "amount", "description", "mcc"], kind="stable")
@@ -369,10 +415,10 @@ def _match_refunds(refunds, stream_of, stream_groups, payment_ns, log_amount, pa
             candidates = np.flatnonzero(reversible & np.isin(groups, list(allowed)))
             if len(candidates):
                 i = candidates[np.lexsort((-payment_ns[candidates], gap[candidates]))[0]]
-                refunded[i] = True
+                refunded[i] = reversed_[i] = True
                 counts[stream_of[i]] += 1
                 break
-    return counts
+    return counts, reversed_
 
 
 def _split_music_streaming(hints, amounts, params) -> str:
@@ -492,7 +538,7 @@ def pseudo_label_sweep(
 
     clients = pd.Index(sorted(transactions["client_id"].astype(str).unique()), dtype="string", name="client_id")
     labels = {s: pd.Series(NONE_LABEL, index=clients, name=LABEL_COLUMN, dtype="string") for s in settings}
-    for client, payments, rows, membership in _detect_per_client(transactions, HISTORY_END, params):
+    for client, payments, rows, membership, _ in _detect_per_client(transactions, HISTORY_END, params):
         family = np.array([r["family"] for r in rows] + [None], dtype=object)  # [-1] -> no stream
         counts = np.array([r["n_payments"] for r in rows] + [0])
         times = pd.DatetimeIndex(payments["timestamp"])
