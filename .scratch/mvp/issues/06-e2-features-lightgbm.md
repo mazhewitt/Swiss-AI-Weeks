@@ -13,3 +13,7 @@
 - [ ] A fixture with easily separable families reaches macro-F1 ≥ 0.95
 - [ ] A fixture with a leakage trap fails unless any label-derived feature is fitted out-of-fold
 - [ ] Tested through the CLI against fixture data (Seam 1)
+
+## Comments
+
+- From ticket 08 (stream detection hardening): build stream-derived features from Active Streams or from streams with 3+ payments, not from raw stream counts. Raw counts (all streams, including 1–2 payment ones) shift between train and valid/test, because description noise on non-home MCCs creates short fragments at different rates per split. Per-stream `refund_rate` is now at most 1 (each refund reverses one payment of its own stream), and music and streaming streams at nearby amounts on MCC 5812 are no longer merged.

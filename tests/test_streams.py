@@ -135,6 +135,69 @@ def test_description_hint_beats_amount_for_music_versus_streaming():
     assert one(streams, "C2").family == "music"
 
 
+def test_music_and_streaming_streams_within_the_amount_tolerance_of_each_other_stay_separate():
+    # 13.5 and 14.2 are 0.05 apart in log amount, inside the amount tolerance: amount alone would chain them.
+    assert np.log(14.2 / 13.5) < StreamParams().amount_tolerance
+    rows = (
+        # C1: the canonical case, music cheaper than streaming
+        series("C1", "audio streaming", "5812", 13.5, "2025-06-03", 6)
+        + series("C1", "media streaming", "5812", 14.2, "2025-06-17", 6)
+        # C2: other hinted descriptions, plus unhinted payments that each join the stream they fit best
+        + series("C2", "member pass", "5812", 13.5, "2025-06-03", 6)
+        + series("C2", "video access", "5812", 14.2, "2025-06-17", 6)
+        + [tx("C2", "2025-12-02", 13.5, "premium plan", "5812"), tx("C2", "2025-12-16", 14.2, "digital plus", "5812")]
+        # C3: music pricier than streaming; the hint still decides the family
+        + series("C3", "audio stream", "5812", 14.2, "2025-06-03", 6)
+        + series("C3", "video access plus", "5812", 13.5, "2025-06-17", 6)
+    )
+    streams = detect_streams(frame(rows))
+    got = {(s.client_id, s.family): (s.median_amount, s.n_payments) for s in streams.itertuples()}
+    assert got == {
+        ("C1", "music"): (13.5, 6),
+        ("C1", "streaming"): (14.2, 6),
+        ("C2", "music"): (13.5, 7),
+        ("C2", "streaming"): (14.2, 7),
+        ("C3", "music"): (14.2, 6),
+        ("C3", "streaming"): (13.5, 6),
+    }
+
+
+def test_unhinted_payments_carry_a_hinted_streams_price_drift():
+    # C1: a drifting video stream whose hinted payments sit at two price levels; "premium plan"
+    # payments bridge them into one stream
+    amounts = [10.4, 10.7, 11.2, 11.8, 12.4, 13.0, 13.2]
+    described = ["video access", "video access", "premium plan", "premium plan", "premium plan", "media streaming", "video access"]
+    rows = [tx("C1", pd.Timestamp("2025-03-01") + 30 * i * DAY, a, d, "5812") for i, (a, d) in enumerate(zip(amounts, described))]
+    # C2: premium plan payments drift up from a video stream, and a later filler fits only the drifted price
+    rows += series("C2", "video access", "5812", 23.0, "2025-03-01", 3)
+    rows += [tx("C2", "2025-06-01", 24.2, "premium plan", "5812"), tx("C2", "2025-07-01", 25.4, "premium plan", "5812")]
+    rows += [tx("C2", "2025-08-01", 26.8, "subscription charge", "5812")]
+    streams = detect_streams(frame(rows))
+    assert (one(streams, "C1").family, one(streams, "C1").n_payments) == ("streaming", 7)
+    assert (one(streams, "C2").family, one(streams, "C2").n_payments) == ("streaming", 6)
+
+
+def test_a_hinted_stray_mcc_payment_prefers_its_hinted_family_then_falls_back_to_either():
+    def music_and_streaming(client):
+        return series(client, "audio streaming", "5812", 13.5, "2025-06-03", 6) + series(
+            client, "media streaming", "5812", 14.2, "2025-06-17", 6
+        )
+
+    rows = music_and_streaming("C1") + [tx("C1", "2025-12-05", 14.1, "audio pass", "5411")]  # nearer streaming
+    rows += music_and_streaming("C3") + [tx("C3", "2025-12-12", 13.6, "video access", "5411")]  # nearer music
+    rows += series("C2", "audio streaming", "5812", 11.3, "2025-06-03", 6)
+    rows += [tx("C2", "2025-12-05", 11.5, "video", "5411")]  # no streaming stream to join: joins the music one
+    streams = detect_streams(frame(rows))
+    got = {(s.client_id, s.family): s.n_payments for s in streams.itertuples()}
+    assert got == {
+        ("C1", "music"): 7,
+        ("C1", "streaming"): 6,
+        ("C3", "music"): 6,
+        ("C3", "streaming"): 7,
+        ("C2", "music"): 7,
+    }
+
+
 # --- Filler Descriptions, stray MCC, Decoy Transactions ------------------------
 
 
@@ -223,18 +286,70 @@ def test_injecting_decoys_at_test_like_rates_leaves_the_stream_table_unchanged()
     pd.testing.assert_frame_equal(detect_streams(noisy), clean)
 
 
+# (client, home MCC, amount, first payment) of every stream in `_client_histories`
+_HISTORY_STREAMS = [
+    ("C1", "7997", 66, "2025-06-05"),
+    ("C1", "5812", 17.9, "2025-03-10"),
+    ("C2", "4814", 47, "2025-01-20"),
+    ("C2", "5732", 6.8, "2025-09-02"),
+    ("C2", "6300", 109, "2025-02-11"),
+    ("C3", "5734", 39, "2025-10-01"),
+    ("C3", "5812", 13.5, "2025-04-01"),
+]
+
+
+@pytest.mark.parametrize(
+    "pattern, variants",
+    [
+        ("digital order", ["digital order", "pay dgtl order online", "digital order plus"]),
+        ("merchant charge", ["merchant charge", "billing merchant charge", "merchant charge service"]),
+        ("service payment", ["service payment", "member service payment", "service payment core"]),
+        ("card purchase", ["card purchase", "pay card purchase", "card purchase digital"]),
+    ],
+)
+def test_every_decoy_pattern_is_excluded_even_when_it_shadows_a_stream(pattern, variants):
+    # The worst case for each Decoy Transaction pattern: its noised variants on every stream's home MCC,
+    # at that stream's exact amount, between its payments. Filler Descriptions in the same spot would join.
+    base = frame(_client_histories())
+    clean = detect_streams(base)
+    decoys = [
+        tx(client, pd.Timestamp(first) + (10 + 30 * k) * DAY, amount, variants[k % len(variants)], mcc)
+        for client, mcc, amount, first in _HISTORY_STREAMS
+        for k in range(3)
+    ]
+    noisy = pd.concat([base, frame(decoys)], ignore_index=True)
+    pd.testing.assert_frame_equal(detect_streams(noisy), clean)
+
+    # control: the same rows with a Filler Description do change the table
+    fillers = frame([{**d, "description": "subscription charge"} for d in decoys])
+    assert not detect_streams(pd.concat([base, fillers], ignore_index=True)).equals(clean)
+
+
 # --- Cutoff -------------------------------------------------------------------
 
 
 def test_transactions_after_the_cutoff_leave_the_stream_table_unchanged():
-    base = frame(_client_histories())
+    def refund(client, when, amount, description, mcc):
+        return tx(client, when, amount, description, mcc, type_="refund", direction="in")
+
+    # C5 pays its gym on 2025-12-29, so refunds of it dated just after the Cutoff would fit it
+    base = frame(_client_histories() + series("C5", "gym membership", "7997", 66, "2025-08-01", 6))
     later = (
         series("C1", "gym membership", "7997", 66, "2026-01-01", 3)
         + series("C3", "saas billing", "5734", 39, "2026-01-05", 2)
         + series("C4", "phone contract", "4814", 47, "2026-01-02", 3)
         + [tx("C2", "2026-01-01T00:00:00", 7.0, "cloud backup", "5732")]
+        + [
+            refund("C5", "2026-01-01T00:00:00", 66, "gym membership", "7997"),
+            refund("C5", "2026-01-03", 66.3, "urban gym", "7997"),
+            refund("C1", "2026-01-02", 66, "gym membership", "7997"),
+            refund("C1", "2026-01-06", 66, "gym membership", "7997"),
+            refund("C3", "2026-01-07", 39, "saas billing", "5734"),
+        ]
     )
     before = detect_streams(base)
+    assert one(before, "C5").last_payment == pd.Timestamp("2025-12-29", tz="UTC")
+    assert one(before, "C5").n_refunds == 0
     after = detect_streams(pd.concat([base, frame(later)], ignore_index=True))
     pd.testing.assert_frame_equal(after, before)
 
@@ -323,6 +438,118 @@ def test_each_refund_is_credited_only_to_the_stream_whose_family_and_amount_it_f
     assert streams.refund_rate.to_dict() == pytest.approx(
         {("gym", 66): 1 / 8, ("software", 12.5): 2 / 5, ("software", 37.6): 3 / 6}
     )
+
+
+def _refund(client, when, amount, description, mcc):
+    return tx(client, when, amount, description, mcc, type_="refund", direction="in")
+
+
+def test_a_refund_counts_only_shortly_after_a_payment_of_matching_amount():
+    rows = series("C1", "saas billing", "5734", 37.6, "2025-06-18", 6)  # 06-18 .. 11-15, every 30 days
+    paid = [r["timestamp"] for r in rows]
+    rows += [
+        _refund("C1", paid[1] + 3 * DAY, 37.9, "saas billing core", "5734"),  # counts: 3 days after, same amount
+        _refund("C1", paid[3] + 6 * DAY, 37.6, "saas billing", "5734"),  # counts: 6 days after
+        _refund("C1", paid[4] + 12 * DAY, 37.6, "saas billing", "5734"),  # mid-cycle: 12 days after, 18 before
+        _refund("C1", paid[0] - 3 * DAY, 37.6, "saas billing", "5734"),  # before the first payment
+        _refund("C1", paid[5] + 35 * DAY, 37.6, "saas billing", "5734"),  # a month after the stream's last payment
+        _refund("C1", paid[2] + 2 * DAY, 45.0, "saas billing", "5734"),  # right time, amount of no payment
+    ]
+    s = one(detect_streams(frame(rows)))
+    assert (s.n_payments, s.n_refunds) == (6, 2)
+    assert s.refund_rate == pytest.approx(2 / 6)
+
+
+def test_a_refund_matches_the_amount_of_the_payment_it_reverses_not_just_the_stream():
+    # a drifting price chains into one stream from 60 to 68; a refund at 60 right after the 68 payment
+    # sits inside the stream's amount range but reverses no payment
+    amounts = [60, 61.8, 63.6, 65.5, 67.4, 68]
+    rows = [tx("C1", pd.Timestamp("2025-06-10") + 30 * i * DAY, a, "gym membership", "7997") for i, a in enumerate(amounts)]
+    rows += [
+        _refund("C1", "2025-11-09", 60, "gym membership", "7997"),  # 2 days after the 68 payment
+        _refund("C1", "2025-08-10", 63.4, "gym membership", "7997"),  # 1 day after the 63.6 payment
+    ]
+    s = one(detect_streams(frame(rows)))
+    assert (s.n_payments, s.n_refunds) == (6, 1)
+
+
+def test_a_refund_is_credited_to_the_stream_whose_payment_it_follows_not_the_nearest_amount():
+    # two gym streams, 66 paid on the 5th and 72 on the 20th; each refund sits nearer the other stream's amount
+    low = series("C1", "gym membership", "7997", 66, "2025-06-05", 6)
+    high = series("C1", "gym membership", "7997", 72, "2025-06-20", 6)
+    rows = low + high + [
+        _refund("C1", low[2]["timestamp"] + 2 * DAY, 69.5, "gym membership", "7997"),  # nearer 72, after a 66 payment
+        _refund("C1", high[3]["timestamp"] + 2 * DAY, 68, "fit club", "7997"),  # nearer 66, after a 72 payment
+        _refund("C1", high[4]["timestamp"] + 2 * DAY, 68.5, "urban gym", "7997"),  # nearer 72, after a 72 payment
+    ]
+    streams = detect_streams(frame(rows)).set_index("median_amount")
+    assert streams.n_payments.to_dict() == {66: 6, 72: 6}
+    assert streams.n_refunds.to_dict() == {66: 1, 72: 2}
+
+
+def test_a_refund_that_fits_two_recent_payments_reverses_the_one_closest_in_amount():
+    # gym 66 paid on the 5th, gym 72 on the 8th; refunds on the 10th fit both payments in amount and time
+    low = series("C1", "gym membership", "7997", 66, "2025-06-05", 6)
+    high = series("C1", "gym membership", "7997", 72, "2025-06-08", 6)
+    rows = low + high + [
+        _refund("C1", high[1]["timestamp"] + 2 * DAY, 68.5, "gym membership", "7997"),  # closer to 66, paid earlier
+        _refund("C1", high[3]["timestamp"] + 2 * DAY, 70.0, "gym membership", "7997"),  # closer to 72, paid later
+    ]
+    streams = detect_streams(frame(rows)).set_index("median_amount")
+    assert streams.n_refunds.to_dict() == {66: 1, 72: 1}
+
+
+def test_each_payment_is_refunded_at_most_once_so_the_refund_rate_never_exceeds_one():
+    software = series("C1", "saas billing", "5734", 39, "2025-09-10", 3)
+    gym = series("C2", "gym membership", "7997", 66, "2025-08-01", 5)
+    rows = software + gym
+    # C1: every payment refunded twice
+    rows += [_refund("C1", p["timestamp"] + DAY, 39, "saas billing", "5734") for p in software for _ in range(2)]
+    # C2: one payment refunded three times
+    rows += [_refund("C2", gym[1]["timestamp"] + d * DAY, 66, "gym membership", "7997") for d in (1, 2, 3)]
+    streams = detect_streams(frame(rows)).set_index("client_id")
+    assert streams.n_refunds.to_dict() == {"C1": 3, "C2": 1}
+    assert streams.refund_rate.to_dict() == pytest.approx({"C1": 1.0, "C2": 1 / 5})
+
+
+# --- amount variation and gap regularity ----------------------------------------
+
+
+def _stream_on(dates, amounts, description="insurance monthly", mcc="6300"):
+    return [tx("C1", d, a, description, mcc) for d, a in zip(dates, amounts)]
+
+
+def test_amount_variation_and_gap_regularity_of_a_jittered_monthly_stream():
+    # gaps 28, 31, 33, 29, 30 days -> period 30, absolute deviations 2, 1, 3, 1, 0 -> median 1
+    # amounts 60, 61, 59, 62, 58, 60 -> mean 60, sample std sqrt(10 / 5) -> variation sqrt(2) / 60
+    dates = ["2025-06-01", "2025-06-29", "2025-07-30", "2025-09-01", "2025-09-30", "2025-10-30"]
+    s = one(detect_streams(frame(_stream_on(dates, [60, 61, 59, 62, 58, 60]))))
+    assert s.period_days == pytest.approx(30)
+    assert s.gap_mad_days == pytest.approx(1.0)
+    assert s.amount_cv == pytest.approx(np.sqrt(2) / 60)  # 0.02357
+
+
+def test_amount_variation_and_gap_regularity_with_wider_jitter_and_a_missed_payment():
+    # gaps 26, 33, 60 (a missed payment, folds to 30), 28, 34, 30 -> period 30,
+    # absolute deviations 4, 3, 0, 2, 4, 0 -> median 2.5
+    # amounts 20, 22, 18, 20, 21, 19, 20 -> mean 20, sample std sqrt(10 / 6) -> variation 0.06455
+    dates = ["2025-04-01", "2025-04-27", "2025-05-30", "2025-07-29", "2025-08-26", "2025-09-29", "2025-10-29"]
+    s = one(detect_streams(frame(_stream_on(dates, [20, 22, 18, 20, 21, 19, 20]))))
+    assert s.n_payments == 7
+    assert s.period_days == pytest.approx(30)
+    assert s.gap_mad_days == pytest.approx(2.5)
+    assert s.amount_cv == pytest.approx(np.sqrt(10 / 6) / 20)  # 0.06455
+
+
+def test_amount_variation_and_gap_regularity_of_a_jittered_biweekly_stream():
+    # gaps 13, 15, 14, 17, 14 -> period 14, absolute deviations 1, 1, 0, 3, 0 -> median 1
+    # amounts 13.5, 13.5, 13.8, 13.5, 13.2, 13.5 -> mean 13.5, sample std sqrt(0.18 / 5)
+    dates = ["2025-09-01", "2025-09-14", "2025-09-29", "2025-10-13", "2025-10-30", "2025-11-13"]
+    s = one(detect_streams(frame(_stream_on(dates, [13.5, 13.5, 13.8, 13.5, 13.2, 13.5], "audio streaming", "5812"))))
+    assert s.family == "music"
+    assert s.period_days == pytest.approx(14)
+    assert s.gap_mad_days == pytest.approx(1.0)
+    assert s.amount_cv == pytest.approx(np.sqrt(0.18 / 5) / 13.5)  # 0.01405
 
 
 # --- parameters ---------------------------------------------------------------

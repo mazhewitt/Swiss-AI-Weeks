@@ -1,6 +1,7 @@
 """The one CLI: fetch-data, split, streams, train, cv, evaluate, submit."""
 
 import argparse
+import dataclasses
 import json
 import sys
 import uuid
@@ -15,7 +16,7 @@ from .cross_validation import CV_FOLDS, out_of_fold_proba
 from .evaluation import append_log, log_row, paired_bootstrap, previous_best, score
 from .fetch import fetch_data
 from .models import MODELS, predict_labels
-from .streams import cached_streams
+from .streams import StreamParams, cached_streams
 from .submission import InvalidSubmission, read_submission, validate, write_submission
 
 DEFAULT_ZIP = Path("hackathons") / "2026" / "data" / "dataset.zip"
@@ -79,8 +80,24 @@ def cmd_split(args, paths: Paths) -> int:
     return 0
 
 
+def stream_param(text: str) -> tuple[str, object]:
+    """Parse `NAME=VALUE` for one StreamParams field, typed like its default (tuples comma-separated)."""
+    name, sep, value = text.partition("=")
+    defaults = {f.name: f.default for f in dataclasses.fields(StreamParams)}
+    if not sep or name not in defaults:
+        raise argparse.ArgumentTypeError(f"expected NAME=VALUE with NAME one of {', '.join(defaults)}; got {text!r}")
+    default = defaults[name]
+    try:
+        if isinstance(default, tuple):
+            return name, tuple(float(v) for v in value.split(","))
+        return name, type(default)(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"bad value for {name}: {value!r}") from None
+
+
 def cmd_streams(args, paths: Paths) -> int:
-    table, cached = cached_streams(paths.raw, args.split, paths.streams)
+    params = dataclasses.replace(StreamParams(), **dict(args.param))
+    table, cached = cached_streams(paths.raw, args.split, paths.streams, params=params)
     n_clients = data.load_transactions(paths.raw, args.split)["client_id"].nunique()
     source = "cached" if cached else "detected"
     print(
@@ -252,6 +269,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("streams", parents=[common], help="detect (or load cached) Recurring Streams and summarise per family")
     p.add_argument("--split", choices=data.SPLITS, default="train")
+    p.add_argument(
+        "--param", type=stream_param, action="append", default=[], metavar="NAME=VALUE",
+        help="override one stream detection parameter (repeatable), e.g. amount_tolerance=0.08",
+    )
     p.set_defaults(func=cmd_streams)
 
     p = sub.add_parser("train", parents=[common], help="fit a model on the train Clients")
