@@ -261,6 +261,51 @@ def test_large_delta_whose_paired_interval_crosses_zero_is_a_tie(fetched, capsys
     assert none["verdict"] == "tie"
 
 
+def scripted(name, answers):
+    """A model that predicts a fixed label per Client (and `none` for anyone else)."""
+
+    class Scripted(models.PriorModel):
+        def fit(self, transactions, labels):
+            return self
+
+        def predict_proba(self, transactions, clients):
+            rows = [[1.0 if answers.get(c, "none") == l else 0.0 for l in LABELS] for c in clients]
+            return pd.DataFrame(rows, index=pd.Index(clients, name="client_id"), columns=LABELS)
+
+    Scripted.name = name
+    return Scripted
+
+
+def test_bootstrap_is_paired_so_a_small_consistent_gain_is_an_improvement(fetched, capsys, monkeypatch):
+    labels = big_valid(fetched, n_none=40, n_gym=20, n_cloud=20)
+    selection = read_split(fetched, capsys).query("set == 'selection'")["client_id"]
+    by_label = {l: sorted(c for c in selection if labels[c] == l) for l in ["none", "gym", "cloud"]}
+    assert {l: len(ids) for l, ids in by_label.items()} == {"none": 28, "gym": 14, "cloud": 14}
+    # Both models share many errors, which makes each macro-F1 noisy on 56 Clients:
+    # half the gym and cloud Clients are called none, and 8 none Clients gym/cloud.
+    base = {c: labels[c] for c in selection}
+    for c in by_label["gym"][:7] + by_label["cloud"][:7]:
+        base[c] = "none"
+    for i, c in enumerate(by_label["none"][:8]):
+        base[c] = "cloud" if i % 2 == 0 else "gym"
+    # The old model differs only on 4 gym Clients the new one gets right.
+    old = {**base, **{c: "none" for c in by_label["gym"][7:11]}}
+    monkeypatch.setitem(models.MODELS, "old", scripted("old", old))
+    monkeypatch.setitem(models.MODELS, "new", scripted("new", base))
+
+    for name in ["old", "new"]:
+        assert fetched.run("train", "--model", name) == 0
+        assert fetched.run("evaluate", "--model", name, "--change", name) == 0
+    first, second = read_rows(fetched.log)
+    # gym F1 6/21 -> 14/25 and none F1 40/66 -> 40/62, over 8 labels: ~0.0392 >= the tie margin.
+    # On the same resampled Clients the new model never loses, so the paired interval
+    # excludes 0; resampling each model independently would bury the gain in noise.
+    assert float(second["delta"]) == pytest.approx((14 / 25 - 6 / 21 + 40 / 62 - 40 / 66) / 8, abs=1e-4)
+    assert float(second["delta"]) >= 0.03
+    assert second["compared_to"] == first["run_id"]
+    assert second["verdict"] == "improvement"
+
+
 def test_checkpoint_rows_are_not_compared_with_selection_rows(fetched):
     big_valid(fetched)
     evaluate_with_majority(fetched, "none", "selection run")
