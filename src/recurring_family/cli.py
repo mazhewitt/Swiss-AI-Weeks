@@ -19,6 +19,7 @@ from .cross_validation import CV_FOLDS, out_of_fold_proba
 from .evaluation import append_log, latest_fidelity, log_row, paired_bootstrap, previous_best, score
 from .fetch import fetch_data
 from .models import MODELS, predict_labels
+from .none_model import NoneModel
 from .pseudo import (
     FIDELITY_CANDIDATES, NONE_SHARE_TOLERANCE, PSEUDO_MIN_PAYMENTS, RULE_F1_TOLERANCE, fidelity_check, milestone2_rule,
 )
@@ -419,6 +420,8 @@ def _new_model(args, pseudo: pd.DataFrame | None = None, info: dict | None = Non
     if args.model in ("ranker", "blend"):
         ranker = MODELS["ranker"]() if pseudo is None else MODELS["ranker"](pseudo=pseudo, pseudo_weight=info["weight"])
         if args.model == "ranker":
+            if getattr(args, "none_model", False):
+                ranker.none_model = NoneModel()
             return ranker
         weight = DEFAULT_RULE_WEIGHT if args.rule_weight is None else args.rule_weight
         return MODELS["blend"](rules, ranker, weight)
@@ -730,6 +733,14 @@ def _rule_arguments(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _none_model_argument(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--none-model", action="store_true",
+        help="ranker only: take P(none) from a Client-level none model fitted on the real-labelled Clients "
+        "with Candidate Streams (never on Pseudo-Labelled ones)",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--root", default=".", help="project root (default: current directory)")
@@ -803,6 +814,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--pseudo-min-payments", type=min_payments, metavar="N",
         help=f"--pseudo: payments a stream needs for its Horizon payment to count (default {PSEUDO_MIN_PAYMENTS})",
     )
+    _none_model_argument(p)
     p.set_defaults(func=cmd_train)
 
     p = sub.add_parser("cv", parents=[common], help="stratified k-fold out-of-fold probabilities")
@@ -824,6 +836,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--pseudo-min-payments", type=min_payments, metavar="N",
         help=f"--pseudo: payments a stream needs for its Horizon payment to count (default {PSEUDO_MIN_PAYMENTS})",
     )
+    _none_model_argument(p)
     p.set_defaults(func=cmd_cv)
 
     p = sub.add_parser(
@@ -890,6 +903,8 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--pseudo-weight and --pseudo-min-payments apply to --pseudo only")
         if len(set(args.pseudo)) < len(args.pseudo):
             parser.error("give each Pseudo-Label source (split and Shifted Cutoff) once")
+        if args.none_model and args.model != "ranker":
+            parser.error("--none-model applies to --model ranker only")
     if args.command == "compare" and (len(args.run) < 2 or len(set(args.run)) < len(args.run)):
         parser.error("give at least two distinct --run candidates")
     if args.command == "pseudo-labels":
