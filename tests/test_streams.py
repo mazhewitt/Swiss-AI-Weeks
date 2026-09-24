@@ -8,7 +8,7 @@ import pytest
 
 from recurring_family.config import CUTOFF, HORIZON
 from recurring_family.data import TRANSACTION_DTYPES
-from recurring_family.streams import StreamParams, detect_streams
+from recurring_family.streams import StreamParams, detect_streams, pseudo_labels
 
 DAY = pd.Timedelta(days=1)
 
@@ -749,3 +749,220 @@ def test_a_stream_mostly_paid_on_a_stray_mcc_reports_that_mcc():
     s = one(detect_streams(frame(rows)))
     assert (s.family, s.n_payments, s.mcc) == ("cloud", 7, "5999")
     assert s.family_description_share == 1.0
+
+
+# --- Pseudo-Labels at a Shifted Cutoff -------------------------------------------
+#
+# The default Shifted Cutoff is 2025-10-03: its Horizon runs to 2025-12-31, the last observed day.
+
+SHIFTED = pd.Timestamp("2025-10-03", tz="UTC")
+
+
+def history(rows):
+    """A transaction table cut at the end of the known history (every history ends 2025-12-31)."""
+    df = frame(rows)
+    return df[df["timestamp"] < CUTOFF].reset_index(drop=True)
+
+
+def monthly(client, description, mcc, amount, start):
+    return series(client, description, mcc, amount, start, 20)
+
+
+def biweekly(client, description, mcc, amount, start):
+    return series(client, description, mcc, amount, start, 40, every_days=14)
+
+
+def test_of_two_streams_due_in_the_horizon_the_earlier_payment_wins():
+    rows = (
+        # C1: biweekly music first pays on 2025-10-10, monthly gym on 2025-10-19
+        biweekly("C1", "audio streaming", "5812", 13.5, "2025-06-06")
+        + monthly("C1", "gym membership", "7997", 66, "2025-04-22")
+        # C2: monthly gym first pays on 2025-10-05, biweekly music on 2025-10-06
+        + monthly("C2", "gym membership", "7997", 66, "2025-04-08")
+        + biweekly("C2", "audio streaming", "5812", 13.5, "2025-06-16")
+    )
+    labels = pseudo_labels(history(rows), SHIFTED)
+    assert labels.to_dict() == {"C1": "music", "C2": "gym"}
+
+
+def test_the_horizon_starts_at_the_cutoff_itself():
+    rows = monthly("C1", "cloud backup", "5732", 6.8, "2025-07-05")  # pays 2025-10-03T00:00
+    rows += monthly("C1", "phone contract", "4814", 47, "2025-07-06")
+    assert pseudo_labels(history(rows), SHIFTED)["C1"] == "cloud"
+
+
+def test_a_stream_that_stopped_before_the_shifted_cutoff_is_none():
+    rows = series("C1", "gym membership", "7997", 66, "2025-01-10", 8)  # last payment 2025-08-08
+    rows += biweekly("C1", "grocery store", "5411", 45, "2025-01-03")  # shopping goes on
+    assert pseudo_labels(history(rows), SHIFTED)["C1"] == "none"
+
+
+def test_a_client_with_no_horizon_payments_is_none_and_still_gets_a_label():
+    rows = series("C1", "gym membership", "7997", 66, "2025-01-10", 8)
+    rows += series("C2", "salary", "0000", 5000, "2025-01-25", 12, type_="transfer", direction="in")
+    labels = pseudo_labels(history(rows), SHIFTED)
+    assert labels.to_dict() == {"C1": "none", "C2": "none"}
+
+
+def test_a_new_stream_that_starts_inside_the_horizon_and_repeats_counts():
+    rows = series("C1", "gym membership", "7997", 66, "2025-01-10", 8)  # stopped in August
+    rows += series("C1", "saas suite", "5734", 19, "2025-10-20", 3)  # new: 10-20, 11-19, 12-19
+    rows += monthly("C1", "phone contract", "4814", 47, "2025-06-01")  # first due 2025-10-29
+    assert pseudo_labels(history(rows), SHIFTED)["C1"] == "software"
+
+    # at an earlier Shifted Cutoff only its first payment is in the Horizon (to 2025-10-29); its
+    # repeats come later in the known history, and still make it a stream
+    rows = series("C2", "saas suite", "5734", 19, "2025-10-20", 3)
+    earlier = pd.Timestamp("2025-07-31", tz="UTC")
+    assert pseudo_labels(history(rows), earlier)["C2"] == "software"
+    assert pseudo_labels(history(rows), earlier, min_payments=4)["C2"] == "none"
+
+
+def test_a_payment_that_never_repeats_is_not_a_pseudo_label():
+    rows = series("C1", "saas suite", "5734", 19, "2025-10-20", 1)  # one-off
+    rows += monthly("C1", "phone contract", "4814", 47, "2025-06-01")  # first due 2025-10-29
+    rows += series("C2", "cloud backup", "5732", 6.8, "2025-11-11", 1)
+    assert pseudo_labels(history(rows), SHIFTED).to_dict() == {"C1": "mobile", "C2": "none"}
+
+
+def test_the_minimum_number_of_stream_payments_is_a_parameter():
+    rows = series("C1", "saas suite", "5734", 19, "2025-10-05", 2)  # 2025-10-05 and 2025-11-04
+    rows += monthly("C1", "phone contract", "4814", 47, "2025-06-01")  # 8 payments, first due 2025-10-29
+    rows += series("C2", "saas suite", "5734", 19, "2025-10-05", 2)
+    assert pseudo_labels(history(rows), SHIFTED).to_dict() == {"C1": "software", "C2": "software"}
+    assert pseudo_labels(history(rows), SHIFTED, min_payments=3).to_dict() == {"C1": "mobile", "C2": "none"}
+    assert pseudo_labels(history(rows), SHIFTED, min_payments=9).to_dict() == {"C1": "none", "C2": "none"}
+
+
+def test_the_minimum_counts_payments_on_both_sides_of_the_shifted_cutoff():
+    # two payments before the Shifted Cutoff and one inside the Horizon make a three-payment stream
+    rows = series("C1", "gym membership", "7997", 66, "2025-08-20", 3)  # 08-20, 09-19, 10-19
+    assert pseudo_labels(history(rows), SHIFTED, min_payments=3)["C1"] == "gym"
+
+
+@pytest.mark.parametrize("min_payments", [0, 1])
+def test_a_minimum_below_two_payments_is_refused(min_payments):
+    rows = monthly("C1", "gym membership", "7997", 66, "2025-04-22")
+    with pytest.raises(ValueError, match="at least 2"):
+        pseudo_labels(history(rows), SHIFTED, min_payments=min_payments)
+
+
+def _gym_first_due_on_10_19(client="C1"):
+    return monthly(client, "gym membership", "7997", 66, "2025-04-22")
+
+
+@pytest.mark.parametrize(
+    "first",
+    [
+        # Decoy Transactions, including ones that shadow the gym stream's amount and MCC
+        tx("C1", "2025-10-04", 66, "merchant charge", "7997"),
+        tx("C1", "2025-10-04", 19, "digital order", "5734"),
+        tx("C1", "2025-10-04", 66, "pay card purchase", "7997"),
+        # one-off payments: another family, and the gym family at an amount no stream has
+        tx("C1", "2025-10-04", 9.9, "cloud backup", "5732"),
+        tx("C1", "2025-10-04", 25, "gym membership", "7997"),
+        # a refund of the gym payment, and a shop payment
+        tx("C1", "2025-10-04", 66, "gym membership", "7997", type_="refund", direction="in"),
+        tx("C1", "2025-10-04", 45, "grocery store", "5411"),
+    ],
+    ids=["decoy", "decoy-other-mcc", "decoy-variant", "one-off", "one-off-same-family", "refund", "shop"],
+)
+def test_a_non_stream_first_horizon_payment_is_ignored(first):
+    rows = _gym_first_due_on_10_19() + [first]
+    assert pseudo_labels(history(rows), SHIFTED)["C1"] == "gym"
+
+
+def test_a_filler_description_inside_a_stream_takes_the_streams_family():
+    rows = _gym_first_due_on_10_19()
+    first_in_horizon = next(r for r in rows if r["timestamp"] >= SHIFTED)
+    first_in_horizon["description"] = "member plan"
+    rows += monthly("C1", "phone contract", "4814", 47, "2025-06-01")  # first due 2025-10-29
+    assert pseudo_labels(history(rows), SHIFTED)["C1"] == "gym"
+
+    # control: the same filler without its stream is no Pseudo-Label
+    rows = [{**first_in_horizon, "client_id": "C2"}, *monthly("C2", "phone contract", "4814", 47, "2025-06-01")]
+    assert pseudo_labels(history(rows), SHIFTED)["C2"] == "mobile"
+
+
+@pytest.mark.parametrize(
+    "cutoff, horizon",
+    [
+        (pd.Timestamp("2025-10-04", tz="UTC"), HORIZON),
+        (CUTOFF, HORIZON),
+        (pd.Timestamp("2025-09-01", tz="UTC"), pd.Timedelta(days=150)),
+    ],
+)
+def test_a_horizon_that_ends_after_the_last_observed_day_is_refused(cutoff, horizon):
+    rows = monthly("C1", "gym membership", "7997", 66, "2025-04-22")
+    with pytest.raises(ValueError, match="2025-12-31") as refused:
+        pseudo_labels(history(rows), cutoff, horizon)
+    latest = (CUTOFF - horizon).strftime("%Y-%m-%d")  # 2025-10-03 for the 90-day Horizon
+    assert f"latest Shifted Cutoff is {latest}" in str(refused.value)
+
+
+def test_an_earlier_shifted_cutoff_and_a_shorter_horizon_are_arguments():
+    rows = _gym_first_due_on_10_19()  # ... 2025-07-21, 2025-08-20, 2025-09-19, 2025-10-19
+    rows += monthly("C1", "phone contract", "4814", 47, "2025-06-01")  # ... 2025-08-30, 2025-09-29
+    august = pd.Timestamp("2025-08-25", tz="UTC")
+    assert pseudo_labels(history(rows), august)["C1"] == "mobile"
+    assert pseudo_labels(history(rows), SHIFTED, pd.Timedelta(days=10))["C1"] == "none"
+    assert pseudo_labels(history(rows), SHIFTED, pd.Timedelta(days=20))["C1"] == "gym"
+
+
+def _horizon_histories():
+    return (
+        # C1: gym first due 2025-10-17, streaming ("premium plan" at 17.9 on 5812) 2025-10-24 -> gym
+        monthly("C1", "gym membership", "7997", 66, "2025-05-20")
+        + monthly("C1", "premium plan", "5812", 17.9, "2025-03-28")
+        + biweekly("C1", "grocery store", "5411", 45, "2025-06-01")
+        # C2: insurance 2025-10-09, mobile 2025-10-22, cloud 2025-11-01 -> insurance
+        + monthly("C2", "phone contract", "4814", 47, "2025-01-25")
+        + monthly("C2", "cloud backup", "5732", 6.8, "2025-09-02")
+        + monthly("C2", "insurance monthly", "6300", 109, "2025-02-11")
+        # C3: software starts in the Horizon; the biweekly music stream stopped in May -> software
+        + series("C3", "saas billing", "5734", 39, "2025-10-10", 3)
+        + series("C3", "audio streaming", "5812", 13.5, "2025-04-01", 5, every_days=14)
+        # C4: its only stream stopped in the summer -> none
+        + series("C4", "phone contract", "4814", 47, "2025-01-05", 7)
+    )
+
+
+_HORIZON_LABELS = {"C1": "gym", "C2": "insurance", "C3": "software", "C4": "none"}
+
+
+def test_injecting_decoys_leaves_every_pseudo_label_unchanged():
+    base = history(_horizon_histories())
+    assert pseudo_labels(base, SHIFTED).to_dict() == _HORIZON_LABELS
+
+    rng = np.random.default_rng(0)
+    decoys = []
+    for client in ["C1", "C2", "C3", "C4"]:
+        for _ in range(rng.poisson(4.5) + 3):
+            decoys.append(
+                tx(
+                    client,
+                    pd.Timestamp("2024-12-01") + int(rng.integers(0, 395)) * DAY,
+                    float(rng.choice([66, 17.9, 47, 6.8, 109, 39, 13.5, 67, 25, 120])),
+                    str(rng.choice(DECOYS)),
+                    str(rng.choice(DECOY_MCCS)),
+                )
+            )
+    # decoys shadowing a stream's amount and MCC, early in the Horizon and before each label's payment
+    shadows = [
+        tx("C1", "2025-10-05", 17.9, "merchant charge", "5812"),
+        tx("C1", "2025-10-06", 17.9, "pay dgtl order online", "5812"),
+        tx("C2", "2025-10-04", 6.8, "card purchase digital", "5732"),
+        tx("C2", "2025-10-05", 47, "digital order", "4814"),
+        tx("C3", "2025-10-04", 13.5, "service payment", "5812"),
+        tx("C3", "2025-10-05", 39, "merchant charge service", "5734"),
+        tx("C4", "2025-10-04", 47, "billing merchant charge", "4814"),
+        tx("C4", "2025-11-03", 47, "digital order plus", "4814"),
+    ]
+    decoys += shadows
+    noisy = pd.concat([base, history(decoys)], ignore_index=True).sample(frac=1, random_state=1)
+    pd.testing.assert_series_equal(pseudo_labels(noisy, SHIFTED), pseudo_labels(base, SHIFTED))
+
+    # control: the same shadows with a Filler Description join a stream and do move labels
+    fillers = history([{**d, "description": "subscription charge"} for d in shadows])
+    moved = pseudo_labels(pd.concat([base, fillers], ignore_index=True), SHIFTED)
+    assert moved["C1"] == "streaming" and moved["C2"] == "cloud"
