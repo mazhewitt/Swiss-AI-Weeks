@@ -1,12 +1,19 @@
-"""The one CLI: fetch-data, train, evaluate, submit."""
+"""The one CLI: fetch-data, split, train, cv, evaluate, submit."""
 
 import argparse
+import json
 import sys
+import uuid
+from contextlib import nullcontext
+from datetime import datetime, timezone
 from pathlib import Path
+
+import pandas as pd
 
 from . import data
 from .config import LABEL_COLUMN, LABELS
-from .evaluation import append_log, log_row, score
+from .cross_validation import CV_FOLDS, out_of_fold_proba
+from .evaluation import append_log, log_row, paired_bootstrap, previous_best, score
 from .fetch import fetch_data
 from .models import MODELS, predict_labels
 from .submission import InvalidSubmission, read_submission, validate, write_submission
@@ -24,6 +31,16 @@ class Paths:
 
     def model(self, name: str) -> Path:
         return self.artifacts / f"{name}.json"
+
+    def model_meta(self, name: str) -> Path:
+        return self.artifacts / f"{name}.meta.json"
+
+    def run_predictions(self, run_id: str) -> Path:
+        return self.artifacts / "runs" / f"{run_id}.csv"
+
+    @property
+    def valid_split(self) -> Path:
+        return self.artifacts / "valid_split.csv"
 
 
 def _load_model(paths: Paths, name: str):
@@ -44,31 +61,108 @@ def cmd_fetch_data(args, paths: Paths) -> int:
     return 0
 
 
-def cmd_train(args, paths: Paths) -> int:
+def cmd_split(args, paths: Paths) -> int:
+    split = data.valid_split(paths.raw)
+    paths.artifacts.mkdir(parents=True, exist_ok=True)
+    split.to_csv(paths.valid_split, index=False)
+    counts = split["set"].value_counts()
+    print(
+        f"split: valid -> {counts.get('selection', 0)} selection, {counts.get('holdout', 0)} sealed holdout "
+        f"Clients -> {paths.valid_split}"
+    )
+    return 0
+
+
+def _training_data(paths: Paths, with_selection: bool) -> tuple[pd.DataFrame, pd.Series]:
+    """Train labels and transactions, plus the valid selection set's when refitting."""
     labels = data.load_labels(paths.raw, "train").set_index("client_id")[LABEL_COLUMN]
     transactions = data.load_transactions(paths.raw, "train")
-    model = MODELS[args.model]().fit(transactions, labels)
+    if with_selection:
+        selection = data.load_labels(paths.raw, "selection").set_index("client_id")[LABEL_COLUMN]
+        valid_tx = data.load_transactions(paths.raw, "valid")
+        labels = pd.concat([labels, selection])
+        transactions = pd.concat(
+            [transactions, valid_tx[valid_tx["client_id"].isin(set(selection.index))]], ignore_index=True
+        )
+    return transactions, labels
+
+
+def _fitted_on(with_selection: bool) -> list[str]:
+    return ["train", "selection"] if with_selection else ["train"]
+
+
+def cmd_train(args, paths: Paths) -> int:
+    with data.training_run(with_selection=args.with_selection):
+        transactions, labels = _training_data(paths, args.with_selection)
+        model = MODELS[args.model]().fit(transactions, labels)
     paths.artifacts.mkdir(parents=True, exist_ok=True)
     model.save(paths.model(args.model))
-    print(f"train: {args.model} fitted on {len(labels)} train Clients -> {paths.model(args.model)}")
+    paths.model_meta(args.model).write_text(json.dumps({"fitted_on": _fitted_on(args.with_selection)}))
+    print(
+        f"train: {args.model} fitted on {len(labels)} Clients ({' + '.join(_fitted_on(args.with_selection))})"
+        f" -> {paths.model(args.model)}"
+    )
+    return 0
+
+
+def cmd_cv(args, paths: Paths) -> int:
+    with data.training_run(with_selection=args.with_selection):
+        transactions, labels = _training_data(paths, args.with_selection)
+        oof = out_of_fold_proba(MODELS[args.model], transactions, labels, folds=args.folds)
+    out = Path(args.out) if args.out else paths.artifacts / "oof" / f"{args.model}.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    oof.to_csv(out, index_label="client_id")
+    print(f"cv: {args.model} {args.folds}-fold out-of-fold probabilities for {len(oof)} Clients -> {out}")
     return 0
 
 
 def cmd_evaluate(args, paths: Paths) -> int:
     model = _load_model(paths, args.model)
-    labels = data.load_labels(paths.raw, args.split).set_index("client_id")[LABEL_COLUMN]
-    transactions = data.load_transactions(paths.raw, args.split)
-    proba = model.predict_proba(transactions, labels.index)
+    split = "holdout" if args.checkpoint else args.split
+    row_type = "checkpoint" if args.checkpoint else "evaluate"
+    meta = paths.model_meta(args.model)
+    fitted_on = json.loads(meta.read_text())["fitted_on"] if meta.exists() else ["train"]
+    if split == "selection" and split in fitted_on:
+        raise data.DataError(
+            f"{args.model} was fitted on {' + '.join(fitted_on)}; scoring it on the selection set is not honest"
+        )
+    with data.checkpoint() if args.checkpoint else nullcontext():
+        labels = data.load_labels(paths.raw, split).set_index("client_id")[LABEL_COLUMN]
+        transactions = data.load_transactions(paths.raw, "train" if split == "train" else "valid")
+        proba = model.predict_proba(transactions, labels.index)
     if args.proba:
         Path(args.proba).parent.mkdir(parents=True, exist_ok=True)
         proba[list(LABELS)].to_csv(args.proba, index_label="client_id")
-    predicted = predict_labels(proba)
-    scores = score(labels, predicted.reindex(labels.index))
-    append_log(
-        paths.log,
-        log_row(scores, change=args.change, model=args.model, split=args.split, conclusion=args.conclusion),
+    predicted = predict_labels(proba).reindex(labels.index)
+    scores = score(labels, predicted)
+
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:6]
+    comparison = None
+    best = previous_best(
+        paths.log, row_type=row_type, split=split, has_predictions=lambda r: paths.run_predictions(r).exists()
     )
-    print(f"evaluate: {args.model} on {args.split} ({len(labels)} Clients)")
+    if best is not None:
+        old = pd.read_csv(paths.run_predictions(best["run_id"]), dtype=str, keep_default_na=False)
+        old = old.set_index("client_id")["predicted"].reindex(labels.index)
+        if not old.isna().any():  # same Clients, so a paired comparison is possible
+            comparison = {**paired_bootstrap(labels, predicted, old), "run_id": best["run_id"]}
+    out = paths.run_predictions(run_id)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    predicted.rename("predicted").to_csv(out, index_label="client_id")
+
+    row = log_row(
+        scores, change=args.change, model=args.model, split=split, conclusion=args.conclusion,
+        row_type=row_type, run_id=run_id, comparison=comparison,
+    )
+    append_log(paths.log, row)
+    print(f"evaluate{' (checkpoint)' if args.checkpoint else ''}: {args.model} on {split} ({len(labels)} Clients)")
+    if comparison is None:
+        print("  no comparable previous best: verdict first")
+    else:
+        print(
+            f"  vs best {comparison['run_id']}: delta {comparison['delta']:+.4f} "
+            f"(95% {comparison['low']:+.4f} .. {comparison['high']:+.4f}) -> {row['verdict']}"
+        )
     print(f"  macro-F1 {scores['macro_f1']:.4f}")
     for label in LABELS:
         print(f"  {label:<10} F1 {scores[f'f1_{label}']:.4f}")
@@ -101,13 +195,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--zip", help=f"challenge zip (default: <root>/{DEFAULT_ZIP})")
     p.set_defaults(func=cmd_fetch_data)
 
+    p = sub.add_parser("split", parents=[common], help="write the valid selection / sealed-holdout split")
+    p.set_defaults(func=cmd_split)
+
     p = sub.add_parser("train", parents=[common], help="fit a model on the train Clients")
     p.add_argument("--model", choices=sorted(MODELS), required=True)
+    p.add_argument("--with-selection", action="store_true", help="also fit on the valid selection set (submission refit)")
     p.set_defaults(func=cmd_train)
+
+    p = sub.add_parser("cv", parents=[common], help="stratified k-fold out-of-fold probabilities")
+    p.add_argument("--model", choices=sorted(MODELS), required=True)
+    p.add_argument("--with-selection", action="store_true", help="cross-validate over train plus the selection set")
+    p.add_argument("--folds", type=int, default=CV_FOLDS)
+    p.add_argument("--out", metavar="CSV", help="default: <root>/artifacts/oof/<model>.csv")
+    p.set_defaults(func=cmd_cv)
 
     p = sub.add_parser("evaluate", parents=[common], help="score a trained model and log the run")
     p.add_argument("--model", choices=sorted(MODELS), required=True)
-    p.add_argument("--split", choices=data.LABELLED_SPLITS, default="valid")
+    p.add_argument("--split", choices=("selection", "train"), default="selection")
+    p.add_argument(
+        "--checkpoint", action="store_true",
+        help="human-only milestone checkpoint: score the sealed holdout (ignores --split)",
+    )
     p.add_argument("--change", default="", help="what changed in this run")
     p.add_argument("--conclusion", default="", help="what the run tells us")
     p.add_argument("--proba", metavar="CSV", help="also write per-Client label probabilities to this CSV")
