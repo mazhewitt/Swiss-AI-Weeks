@@ -1,0 +1,18 @@
+variant,n_features,argmax_macro_f1,tuned_macro_f1,nested_tuned_macro_f1,nested_gain
+baseline: ranker with Pseudo-Labels,0,0.5485,0.5819,0.5699,0.0
+A: stream fields,29,0.5925,0.598,0.5761,0.0062
+A + ranker_none,30,0.6053,0.6106,0.5958,0.0259
+A+B: stream fields and churn,104,0.6137,0.6206,0.6033,0.0334
+A+B + ranker_none,105,0.6154,0.6192,0.6095,0.0396
+"A: stream fields, Active-Stream Clients only",29,0.6036,0.6093,0.5933,0.0234
+"A + ranker_none, Active-Stream Clients only",30,0.6068,0.6102,0.5918,0.0219
+"A+B: stream fields and churn, Active-Stream Clients only",104,0.6089,0.6129,0.5941,0.0242
+"A+B + ranker_none, Active-Stream Clients only",105,0.6053,0.6117,0.597,0.0271
+"A+B: stream fields and churn, leaves 15",104,0.6068,0.618,0.6002,0.0303
+"A+B: stream fields and churn, min_child 60",104,0.6095,0.6136,0.5951,0.0252
+"A+B: stream fields and churn, 400 trees",104,0.6136,0.6204,0.6037,0.0338
+"A+B: stream fields and churn, lr 0.05, 300 trees",104,0.6101,0.6188,0.5999,0.03
+"A+B + ranker_none, leaves 15",105,0.6132,0.6224,0.6079,0.038
+"A+B + ranker_none, min_child 60",105,0.6121,0.6176,0.6055,0.0356
+"A+B + ranker_none, 400 trees",105,0.616,0.623,0.6051,0.0352
+"A+B + ranker_none, lr 0.05, 300 trees",105,0.6138,0.6205,0.5979,0.028
