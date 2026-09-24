@@ -4,7 +4,7 @@
 
 **Blocked by:** 02, 03
 
-**Status:** ready-for-agent
+**Status:** wontfix (superseded by .scratch/ranker/issues/01; its branch is resumed there)
 
 - [ ] `train --model rules` predicts for every Client in a split, including Clients with no streams
 - [ ] The ordering rule is selectable (default: soonest projected next payment); only Active Streams with next payment within the Horizon are considered

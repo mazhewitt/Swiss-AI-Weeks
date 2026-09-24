@@ -4,7 +4,7 @@
 
 **Blocked by:** 04, 05, 06
 
-**Status:** ready-for-agent
+**Status:** wontfix (superseded by .scratch/ranker/issues/06)
 
 - [ ] `train --model lgbm --decision tuned` works end to end, with E3 fitted on E2's out-of-fold probabilities
 - [ ] An acceptance gate reports pass/fail: beats E1 on the selection set and no Merchant Family loses more than 0.05 F1 against E1

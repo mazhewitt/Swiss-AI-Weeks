@@ -26,6 +26,14 @@ _Avoid_: Window, forecast period
 The label: the Merchant Family of the first Recurring Stream payment a Client makes within the Horizon, or `none`. It is defined by what happens after the Cutoff, not by any rule over the history.
 _Avoid_: Target merchant, next merchant
 
+**Shifted Cutoff**:
+A Cutoff moved earlier inside the known history, so that its whole Horizon has already been observed.
+_Avoid_: Pseudo-cutoff, backtest date
+
+**Pseudo-Label**:
+The Next Recurring Family observed after a Shifted Cutoff, taken from the Client's own later payments rather than from a label file.
+_Avoid_: Weak label, silver label
+
 ### Streams
 
 **Recurring Stream**:
@@ -35,6 +43,10 @@ _Avoid_: Subscription (insurance premiums and phone contracts are not subscripti
 **Active Stream**:
 A Recurring Stream with at least three payments whose most recent payment is within about 1.6 periods of the Cutoff.
 _Avoid_: Live stream, current subscription
+
+**Candidate Stream**:
+Any of a Client's Recurring Streams, considered as the one that will carry the Client's Next Recurring Family. It need not be an Active Stream.
+_Avoid_: Option, choice
 
 **Decoy Transaction**:
 A card payment with a generic, subscription-sounding description (e.g. "digital order", "merchant charge") that belongs to no Recurring Stream.
