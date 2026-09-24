@@ -966,3 +966,30 @@ def test_injecting_decoys_leaves_every_pseudo_label_unchanged():
     fillers = history([{**d, "description": "subscription charge"} for d in shadows])
     moved = pseudo_labels(pd.concat([base, fillers], ignore_index=True), SHIFTED)
     assert moved["C1"] == "streaming" and moved["C2"] == "cloud"
+
+
+# --- inputs at a Shifted Cutoff ------------------------------------------------------
+
+
+def test_inputs_at_a_shifted_cutoff_use_only_the_transactions_before_it():
+    from recurring_family.pseudo import milestone2_rule
+
+    base = history(_horizon_histories())
+    before = base[base["timestamp"] < SHIFTED]
+    # the Horizon rewritten: every payment from the Shifted Cutoff on moves to another family and amount
+    rewritten = base.copy()
+    after = rewritten["timestamp"] >= SHIFTED
+    rewritten.loc[after, ["description", "mcc", "amount"]] = ["cloud backup", "5732", 6.8]
+    assert pseudo_labels(rewritten, SHIFTED).to_dict() != pseudo_labels(base, SHIFTED).to_dict()
+
+    clients = pd.Index(["C1", "C2", "C3", "C4"], name="client_id")
+    rule = milestone2_rule(SHIFTED)
+    expected_streams = detect_streams(before, SHIFTED)
+    expected_proba = rule.predict_proba(before, clients)
+    for full in (base, rewritten):
+        pd.testing.assert_frame_equal(detect_streams(full, SHIFTED), expected_streams)
+        pd.testing.assert_frame_equal(rule.predict_proba(full, clients), expected_proba)
+        pd.testing.assert_frame_equal(rule.proba_from_streams(detect_streams(full, SHIFTED), clients), expected_proba)
+    # C1's gym and C2's insurance are Active Streams due inside the Horizon: the rule predicts from them
+    predicted = expected_proba.idxmax(axis=1).to_dict()
+    assert predicted["C1"] == "gym" and predicted["C2"] == "insurance"
