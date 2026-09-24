@@ -1,6 +1,7 @@
-"""The one CLI: fetch-data, split, streams, pseudo-labels, train, cv, features, evaluate, submit."""
+"""The one CLI: fetch-data, split, streams, pseudo-labels, train, cv, features, evaluate, compare, submit."""
 
 import argparse
+import csv
 import dataclasses
 import json
 import sys
@@ -12,6 +13,7 @@ import pandas as pd
 
 from . import data
 from . import decision as decision_layer
+from .comparison import Candidate, compare_candidates, summary_lines, to_markdown
 from .config import CUTOFF, HORIZON, LABEL_COLUMN, LABELS, MERCHANT_FAMILIES, SHIFTED_CUTOFF
 from .cross_validation import CV_FOLDS, out_of_fold_proba
 from .evaluation import append_log, latest_fidelity, log_row, paired_bootstrap, previous_best, score
@@ -610,6 +612,67 @@ def cmd_evaluate(args, paths: Paths) -> int:
     return 0
 
 
+def _logged_run(paths: Paths, run_id: str) -> dict:
+    rows = []
+    if paths.log.exists():
+        with open(paths.log, newline="") as f:
+            rows = [r for r in csv.DictReader(f) if r.get("run_id") == run_id]
+    if not rows:
+        raise data.DataError(f"no run {run_id} in the experiment log {paths.log}")
+    return rows[-1]
+
+
+def _saved_predictions(paths: Paths, run_id: str) -> pd.Series:
+    path = paths.run_predictions(run_id)
+    if not path.exists():
+        raise data.DataError(
+            f"run {run_id} has no saved predictions at {path}; restore them (they are committed under "
+            "experiments/runs/) before comparing"
+        )
+    return pd.read_csv(path, dtype=str, keep_default_na=False).set_index("client_id")["predicted"]
+
+
+def cmd_compare(args, paths: Paths) -> int:
+    rows = [_logged_run(paths, run_id) for run_id in args.run]
+    sealed = [r["run_id"] for r in rows if r.get("split") == "holdout" or r.get("row_type") == "checkpoint"]
+    if sealed:
+        raise data.DataError(
+            f"{', '.join(sealed)} scored the sealed holdout; candidates are chosen on the selection set only, "
+            "and the sealed holdout is read only in a human-started checkpoint"
+        )
+    splits = sorted({r["split"] for r in rows})
+    if len(splits) > 1:
+        raise data.DataError(
+            f"candidates must be scored on the same split for a paired comparison; got {', '.join(splits)}"
+        )
+    split = splits[0]
+    if split not in ("selection", "train"):
+        raise data.DataError(f"cannot compare runs on {split!r}: expected selection (or train) runs")
+    candidates = [
+        Candidate(r["run_id"], r["model"], r["change"], _saved_predictions(paths, r["run_id"])) for r in rows
+    ]
+    clients = set(candidates[0].predicted.index)
+    for c in candidates[1:]:
+        if set(c.predicted.index) != clients:
+            raise data.DataError(
+                f"{c.run_id} predicted for different Clients than {candidates[0].run_id}; "
+                "a paired comparison is impossible"
+            )
+    # every prediction is already made and saved: only now read the labels they are scored against
+    with data.scoring():
+        labels = data.load_labels(paths.raw, split).set_index("client_id")[LABEL_COLUMN]
+    if set(labels.index) != clients:
+        raise data.DataError(f"the saved predictions are not for the {split} Clients; they cannot be scored")
+    comparison = compare_candidates(labels, candidates, split)
+    print("\n".join(summary_lines(comparison)))
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(to_markdown(comparison, args.title))
+        print(f"  -> {out}")
+    return 0
+
+
 def cmd_submit(args, paths: Paths) -> int:
     expected = data.load_sample_submission(paths.raw)["client_id"]
     if args.check:
@@ -757,6 +820,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.set_defaults(func=cmd_evaluate)
 
+    p = sub.add_parser(
+        "compare", parents=[common],
+        help="pick a milestone candidate among logged runs by paired bootstrap (ties go to the simpler one)",
+    )
+    p.add_argument(
+        "--run", action="append", required=True, metavar="RUN_ID",
+        help="a logged run to compare (repeatable, at least two), simplest candidate first",
+    )
+    p.add_argument("--out", metavar="MD", help="also write the comparison as Markdown to this file")
+    p.add_argument("--title", default="Candidate comparison", help="the Markdown heading")
+    p.set_defaults(func=cmd_compare)
+
     p = sub.add_parser("submit", parents=[common], help="write or check a submission CSV")
     group = p.add_mutually_exclusive_group(required=True)
     group.add_argument("--model", choices=sorted(MODELS))
@@ -783,6 +858,8 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--pseudo-weight and --pseudo-min-payments apply to --pseudo only")
         if len(set(args.pseudo)) < len(args.pseudo):
             parser.error("give each Pseudo-Label source (split and Shifted Cutoff) once")
+    if args.command == "compare" and (len(args.run) < 2 or len(set(args.run)) < len(args.run)):
+        parser.error("give at least two distinct --run candidates")
     if args.command == "pseudo-labels":
         if args.fidelity and args.min_payments is not None:
             parser.error("--fidelity chooses min_payments itself; give the settings to choose among with --candidates")

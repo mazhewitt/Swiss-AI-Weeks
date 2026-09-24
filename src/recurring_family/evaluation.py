@@ -36,26 +36,41 @@ def _one_hot(labels: pd.Series) -> np.ndarray:
     return (np.asarray(labels, dtype=object)[:, None] == np.array(LABELS, dtype=object)[None, :]).astype(float)
 
 
+def _resample_weights(size: int) -> np.ndarray:
+    """How often each Client is drawn in each bootstrap resample: the same fixed-seed resamples for
+    every call on the same number of Clients, so any two runs scored on them are paired."""
+    rng = np.random.default_rng(BOOTSTRAP_SEED)
+    draws = rng.integers(size, size=(BOOTSTRAP_SAMPLES, size))
+    weights = np.zeros((BOOTSTRAP_SAMPLES, size))
+    np.add.at(weights, (np.arange(BOOTSTRAP_SAMPLES)[:, None], draws), 1.0)
+    return weights
+
+
+def _weighted_macro_f1(weights: np.ndarray, truth: np.ndarray, predicted: np.ndarray) -> np.ndarray:
+    tp, true, pred = weights @ (truth * predicted), weights @ truth, weights @ predicted
+    denom = true + pred
+    f1 = np.divide(2 * tp, denom, out=np.zeros_like(denom), where=denom > 0)
+    return f1.mean(axis=-1)
+
+
 def paired_bootstrap(truth: pd.Series, new: pd.Series, old: pd.Series) -> dict[str, float]:
     """Macro-F1(new) - macro-F1(old) on the same Clients, with a 95% interval from
     resampling Clients (the same resample for both, hence paired)."""
     t, n, o = _one_hot(truth), _one_hot(new), _one_hot(old)
     size = len(t)
-    rng = np.random.default_rng(BOOTSTRAP_SEED)
-    draws = rng.integers(size, size=(BOOTSTRAP_SAMPLES, size))
-    weights = np.zeros((BOOTSTRAP_SAMPLES, size))
-    np.add.at(weights, (np.arange(BOOTSTRAP_SAMPLES)[:, None], draws), 1.0)
-
-    def macro(w: np.ndarray, pred: np.ndarray) -> np.ndarray:
-        tp, true, predicted = w @ (t * pred), w @ t, w @ pred
-        denom = true + predicted
-        f1 = np.divide(2 * tp, denom, out=np.zeros_like(denom), where=denom > 0)
-        return f1.mean(axis=-1)
-
-    delta = float(macro(np.ones(size), n) - macro(np.ones(size), o))
-    diffs = macro(weights, n) - macro(weights, o)
+    weights = _resample_weights(size)
+    delta = float(_weighted_macro_f1(np.ones(size), t, n) - _weighted_macro_f1(np.ones(size), t, o))
+    diffs = _weighted_macro_f1(weights, t, n) - _weighted_macro_f1(weights, t, o)
     low, high = np.percentile(diffs, [2.5, 97.5])
     return {"delta": delta, "low": float(low), "high": float(high)}
+
+
+def bootstrap_interval(truth: pd.Series, predicted: pd.Series) -> dict[str, float]:
+    """Macro-F1 of one run with a 95% interval over the same Client resamples `paired_bootstrap` uses."""
+    t, p = _one_hot(truth), _one_hot(predicted)
+    scores = _weighted_macro_f1(_resample_weights(len(t)), t, p)
+    low, high = np.percentile(scores, [2.5, 97.5])
+    return {"macro_f1": float(_weighted_macro_f1(np.ones(len(t)), t, p)), "low": float(low), "high": float(high)}
 
 
 def verdict(comparison: dict[str, float]) -> str:
