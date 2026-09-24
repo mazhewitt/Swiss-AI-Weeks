@@ -7,6 +7,7 @@ from typing import Protocol
 import pandas as pd
 
 from .config import LABELS
+from .rules import RulesModel
 
 
 class Model(Protocol):
@@ -60,7 +61,7 @@ class PriorModel:
         return cls(json.loads(Path(path).read_text())["priors"])
 
 
-MODELS: dict[str, type] = {"prior": PriorModel}
+MODELS: dict[str, type] = {"prior": PriorModel, "rules": RulesModel}
 
 
 def predict_labels(proba: pd.DataFrame) -> pd.Series:

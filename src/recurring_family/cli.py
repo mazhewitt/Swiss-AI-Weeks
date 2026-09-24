@@ -16,6 +16,7 @@ from .cross_validation import CV_FOLDS, out_of_fold_proba
 from .evaluation import append_log, log_row, paired_bootstrap, previous_best, score
 from .fetch import fetch_data
 from .models import MODELS, predict_labels
+from .rules import DEFAULT_ORDERING, ORDERINGS
 from .streams import StreamParams, cached_streams
 from .submission import InvalidSubmission, read_submission, validate, write_submission
 
@@ -131,10 +132,18 @@ def _fitted_on(with_selection: bool) -> list[str]:
     return ["train", "selection"] if with_selection else ["train"]
 
 
+def _new_model(args):
+    """A fresh model; the rule baseline takes its ordering rule and stream parameters from `train`."""
+    if args.model != "rules":
+        return MODELS[args.model]()
+    params = dataclasses.replace(StreamParams(), **dict(args.param))
+    return MODELS["rules"](ordering=args.ordering or DEFAULT_ORDERING, params=params)
+
+
 def cmd_train(args, paths: Paths) -> int:
     with data.training_run(with_selection=args.with_selection):
         transactions, labels = _training_data(paths, args.with_selection)
-        model = MODELS[args.model]().fit(transactions, labels)
+        model = _new_model(args).fit(transactions, labels)
     paths.artifacts.mkdir(parents=True, exist_ok=True)
     model.save(paths.model(args.model))
     paths.model_meta(args.model).write_text(json.dumps({"fitted_on": _fitted_on(args.with_selection)}))
@@ -205,6 +214,7 @@ def cmd_evaluate(args, paths: Paths) -> int:
         labels = data.load_labels(paths.raw, split).set_index("client_id")[LABEL_COLUMN]
     predicted = predict_labels(proba).reindex(labels.index)
     scores = score(labels, predicted)
+    diagnostics = model.diagnostics(transactions, labels, predicted) if hasattr(model, "diagnostics") else None
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:6]
     comparison = None
@@ -221,7 +231,7 @@ def cmd_evaluate(args, paths: Paths) -> int:
 
     row = log_row(
         scores, change=args.change, model=args.model, split=split, conclusion=args.conclusion,
-        row_type=row_type, run_id=run_id, comparison=comparison,
+        row_type=row_type, run_id=run_id, comparison=comparison, diagnostics=diagnostics,
     )
     append_log(paths.log, row)
     print(f"evaluate{' (checkpoint)' if args.checkpoint else ''}: {args.model} on {split} ({len(labels)} Clients)")
@@ -235,6 +245,11 @@ def cmd_evaluate(args, paths: Paths) -> int:
     print(f"  macro-F1 {scores['macro_f1']:.4f}")
     for label in LABELS:
         print(f"  {label:<10} F1 {scores[f'f1_{label}']:.4f}")
+    if diagnostics is not None:
+        print(
+            f"  coverage {diagnostics['coverage']:.4f} (true family among surviving streams), "
+            f"selection accuracy {diagnostics['selection_accuracy']:.4f} (given coverage)"
+        )
     return 0
 
 
@@ -278,6 +293,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("train", parents=[common], help="fit a model on the train Clients")
     p.add_argument("--model", choices=sorted(MODELS), required=True)
     p.add_argument("--with-selection", action="store_true", help="also fit on the valid selection set (submission refit)")
+    p.add_argument(
+        "--ordering", choices=sorted(ORDERINGS),
+        help=f"rules only: which surviving stream to predict (default: {DEFAULT_ORDERING}, the projected next payment)",
+    )
+    p.add_argument(
+        "--param", type=stream_param, action="append", default=[], metavar="NAME=VALUE",
+        help="rules only: override one stream detection parameter (repeatable)",
+    )
     p.set_defaults(func=cmd_train)
 
     p = sub.add_parser("cv", parents=[common], help="stratified k-fold out-of-fold probabilities")
@@ -309,7 +332,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command == "train" and args.model != "rules" and (args.ordering or args.param):
+        parser.error("--ordering and --param apply to --model rules only")
     paths = Paths(Path(args.root))
     try:
         return args.func(args, paths)

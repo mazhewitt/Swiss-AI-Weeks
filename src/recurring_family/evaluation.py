@@ -12,7 +12,7 @@ from .config import LABELS
 
 LOG_COLUMNS = [
     "date", "row_type", "run_id", "change", "model", "split", "macro_f1", *[f"f1_{l}" for l in LABELS],
-    "delta", "verdict", "compared_to", "conclusion",
+    "delta", "verdict", "compared_to", "coverage", "selection_accuracy", "conclusion",
 ]
 
 TIE_MARGIN = 0.03
@@ -78,6 +78,7 @@ def previous_best(log_path: Path, *, row_type: str, split: str) -> dict | None:
 def log_row(
     scores: dict[str, float], *, change: str, model: str, split: str, conclusion: str,
     row_type: str = "evaluate", run_id: str = "", comparison: dict | None = None,
+    diagnostics: dict[str, float] | None = None,
 ) -> dict:
     row = {
         "date": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -89,6 +90,8 @@ def log_row(
         "conclusion": conclusion,
     }
     row.update({k: f"{v:.4f}" for k, v in scores.items()})
+    # a model's own diagnostics (E1: coverage, selection accuracy); blank where undefined
+    row.update({k: "" if np.isnan(v) else f"{v:.4f}" for k, v in (diagnostics or {}).items()})
     if comparison is None:
         row["verdict"] = "first"
     else:
