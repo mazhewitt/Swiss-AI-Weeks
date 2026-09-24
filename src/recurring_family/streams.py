@@ -216,7 +216,8 @@ def _client_streams(client, payments, refunds, cutoff, params):
         if kind[i] == "filler":
             stream_of[i] = fit(log_amount[i], families[i])
         elif kind[i] == "ambiguous":
-            # MCC vote failed: the description may still be filler for its MCC's home family.
+            # MCC vote failed: join a fitting stream of a family the description can mean (a stray
+            # MCC) or of the MCC's home family (the description is filler there); else no stream.
             home = HOME_MCC.get(mcc[i])
             stream_of[i] = fit(log_amount[i], families[i] | ({home} if home else set()))
 

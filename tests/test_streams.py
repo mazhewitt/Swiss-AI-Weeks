@@ -363,3 +363,101 @@ def test_a_family_keyword_payment_on_a_foreign_mcc_still_joins_its_family_stream
     rows += [tx("C1", "2025-12-20", 6.8, "cloud backup", "5411"), tx("C1", "2025-08-20", 29.0, "cloud backup", "5812")]
     s = one(detect_streams(frame(rows)))
     assert (s.family, s.n_payments) == ("cloud", 7)
+
+
+# --- Filler Descriptions with several streams per Client -------------------------
+
+TOLERANCE = StreamParams().amount_tolerance
+
+
+def _six_streams(client):
+    """One Client with a stream of every detection group, on its home MCC, far apart in amount."""
+    return (
+        series(client, "gym membership", "7997", 66, "2025-06-05", 7)
+        + series(client, "media streaming", "5812", 18, "2025-06-07", 7)
+        + series(client, "saas billing", "5734", 39, "2025-06-09", 7)
+        + series(client, "cloud backup", "5732", 6.8, "2025-06-11", 7)
+        + series(client, "phone contract", "4814", 47, "2025-06-13", 7)
+        + series(client, "insurance monthly", "6300", 109, "2025-06-15", 7)
+    )
+
+
+def _joined_family(description, mcc, amount):
+    """The family of the stream one extra payment joins in `_six_streams`, or None."""
+    base = frame(_six_streams("C1"))
+    extra = frame([tx("C1", "2025-09-20T12:00:00", amount, description, mcc)])
+    before = detect_streams(base).set_index("family").n_payments
+    after = detect_streams(pd.concat([base, extra], ignore_index=True)).set_index("family").n_payments
+    assert list(after.index) == list(before.index), "an extra payment must never add or split a stream"
+    grew = after[after != before]
+    assert (grew - before[grew.index]).tolist() in ([], [1]), grew
+    return grew.index[0] if len(grew) else None
+
+
+@pytest.mark.parametrize(
+    "description, mcc, amount, family",
+    [
+        # a filler takes the family of its MCC, even when another family's stream has its amount
+        ("member plan", "5812", 18, "streaming"),
+        ("member plan", "5812", 66, None),
+        ("subscription charge", "7997", 66, "gym"),
+        ("subscription charge", "7997", 18, None),
+        ("digital service", "6300", 109, "insurance"),
+        ("digital service", "6300", 47, None),
+        # and must fit its stream's amount within the amount tolerance
+        ("member plan", "7997", 66 * np.exp(0.9 * TOLERANCE), "gym"),
+        ("member plan", "7997", 66 * np.exp(-0.9 * TOLERANCE), "gym"),
+        ("member plan", "7997", 66 * np.exp(1.1 * TOLERANCE), None),
+        ("member plan", "7997", 66 * np.exp(-1.1 * TOLERANCE), None),
+        ("member plan", "7997", 80, None),
+        ("member plan", "7997", 100, None),
+    ],
+)
+def test_a_filler_joins_only_a_stream_whose_amount_and_mcc_it_fits(description, mcc, amount, family):
+    assert _joined_family(description, mcc, amount) == family
+
+
+def test_same_family_streams_at_different_amounts_each_take_only_the_fillers_near_their_amount():
+    rows = series("C1", "gym membership", "7997", 45, "2025-06-05", 7)
+    rows += series("C1", "gym membership", "7997", 66, "2025-06-07", 7)
+    rows += [
+        tx("C1", "2025-08-20", 45, "member plan", "7997"),
+        tx("C1", "2025-09-20", 66, "member plan", "7997"),
+        tx("C1", "2025-10-20", 66, "subscription charge", "7997"),
+        tx("C1", "2025-11-20", 55, "member plan", "7997"),  # between the two, fits neither
+    ]
+    # two gym streams whose amounts lie within the tolerance of a filler: the nearer one takes it
+    rows += series("C2", "gym membership", "7997", 66, "2025-06-05", 7)
+    rows += series("C2", "gym membership", "7997", 72, "2025-06-07", 7)
+    rows += [tx("C2", "2025-09-20", 69.5, "member plan", "7997")]
+    streams = detect_streams(frame(rows))
+    counts = {(s.client_id, s.median_amount): s.n_payments for s in streams.itertuples()}
+    assert set(streams.family) == {"gym"}
+    assert counts == {("C1", 45): 8, ("C1", 66): 9, ("C2", 66): 7, ("C2", 72): 8}
+
+
+# --- ambiguous descriptions the MCC vote leaves unresolved ------------------------
+
+
+@pytest.mark.parametrize(
+    "description, mcc, amount, family",
+    [
+        # joins a fitting stream of its MCC's home family
+        ("digital plus", "7997", 66, "gym"),
+        ("premium plan", "6300", 109, "insurance"),
+        ("service plan", "5734", 39, "software"),
+        # a stray MCC: joins a fitting stream of a family the description can mean
+        ("premium plan", "5732", 39, "software"),
+        ("service plan", "5734", 6.8, "cloud"),
+        ("digital plus", "5411", 47, "mobile"),
+        # otherwise joins no stream
+        ("digital plus", "7997", 90, None),
+        ("premium plan", "6300", 66, None),
+        ("premium plan", "5411", 66, None),
+        ("service plan", "5734", 18, None),
+    ],
+)
+def test_an_unresolved_ambiguous_payment_joins_only_a_fitting_stream_of_its_home_or_described_family(
+    description, mcc, amount, family
+):
+    assert _joined_family(description, mcc, amount) == family
