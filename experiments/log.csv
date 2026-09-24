@@ -1,0 +1,2 @@
+date,change,model,split,macro_f1,f1_cloud,f1_gym,f1_insurance,f1_mobile,f1_music,f1_software,f1_streaming,f1_none,conclusion
+2026-09-24T12:42:56+00:00,Prior-probability baseline (walking skeleton),prior,valid,0.0567,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.4532,All-none floor; later models must beat this
