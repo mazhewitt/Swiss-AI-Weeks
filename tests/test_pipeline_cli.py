@@ -1,12 +1,19 @@
 """Seam 1: the pipeline through the CLI against the fixture data folder."""
 
 import csv
+import dataclasses
 import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 
 import pandas as pd
 import pytest
 
 from conftest import FIXTURE_DATA
+from recurring_family import streams as stream_detection
+from recurring_family.streams import StreamParams
 
 EXPECTED_FILES = sorted(p.name for p in FIXTURE_DATA.iterdir())
 LABELS = ["cloud", "gym", "insurance", "mobile", "music", "software", "streaming", "none"]
@@ -263,3 +270,80 @@ def test_streams_table_is_cached_per_split(fetched, capsys):
     raw.write_text("\n".join(line for line in raw.read_text().splitlines() if "7997" not in line) + "\n")
     assert fetched.run("streams", "--split", "train") == 0
     assert family_summary(capsys.readouterr().out)["gym"]["streams"] == 0
+
+
+def streams_run(project, capsys, *args, split="train"):
+    """Run `streams` and return (source, per-family summary): source is 'cached' or 'detected'."""
+    capsys.readouterr()
+    assert project.run("streams", "--split", split, *args) == 0
+    out = capsys.readouterr().out
+    header = out.splitlines()[0]
+    source = "cached" if "[cached]" in header else "detected" if "[detected]" in header else header
+    return source, family_summary(out)
+
+
+# a changed value for every stream parameter; the gym fixture stream (4 payments, last 2025-12-05) goes
+# inactive under the first two
+CHANGED_PARAMS = {
+    "min_payments": "5",
+    "active_periods": "0.5",
+    "amount_tolerance": "0.2",
+    "canonical_periods": "7,30",
+    "music_streaming_split": "20",
+    "refund_window_days": "3",
+}
+
+
+def test_every_stream_parameter_is_part_of_the_cache_key(fetched, capsys):
+    assert set(CHANGED_PARAMS) == {f.name for f in dataclasses.fields(StreamParams)}
+    assert streams_run(fetched, capsys)[0] == "detected"
+    for name, value in CHANGED_PARAMS.items():
+        source, summary = streams_run(fetched, capsys, "--param", f"{name}={value}")
+        assert source == "detected", name
+        assert streams_run(fetched, capsys, "--param", f"{name}={value}")[0] == "cached", name
+        if name in ("min_payments", "active_periods"):
+            assert summary["gym"] == {"streams": 1, "active": 0, "clients": 1}, name
+
+
+def test_tables_for_different_parameter_sets_coexist_per_split(fetched, capsys):
+    cache = fetched.root / "artifacts" / "streams"
+    assert streams_run(fetched, capsys, split="valid")[0] == "detected"
+    assert streams_run(fetched, capsys)[0] == "detected"
+    assert streams_run(fetched, capsys, "--param", "min_payments=5")[0] == "detected"
+    assert streams_run(fetched, capsys, "--param", "min_payments=5", "--param", "active_periods=3")[0] == "detected"
+    assert sorted(f.name.split("-")[0] for f in cache.iterdir()) == ["train", "train", "train", "valid"]
+
+    # a sweep back and forth serves each table from the cache, each with its own content
+    for _ in range(2):
+        source, summary = streams_run(fetched, capsys)
+        assert (source, summary["gym"]["active"]) == ("cached", 1)
+        source, summary = streams_run(fetched, capsys, "--param", "min_payments=5")
+        assert (source, summary["gym"]["active"]) == ("cached", 0)
+    assert streams_run(fetched, capsys, split="valid")[0] == "cached"
+
+
+def test_a_changed_family_table_rebuilds_the_stream_table(fetched, capsys, monkeypatch):
+    assert streams_run(fetched, capsys)[1]["gym"]["streams"] == 1
+    monkeypatch.delitem(stream_detection.HOME_MCC, "7997")  # gym payments lose their home MCC
+    source, summary = streams_run(fetched, capsys)
+    assert (source, summary["gym"]["streams"]) == ("detected", 0)
+
+
+def test_a_changed_detector_source_rebuilds_the_stream_table(fetched, tmp_path):
+    # Run the CLI in fresh interpreters from a copy of the package, so the detector source can be edited.
+    package = Path(stream_detection.__file__).parent
+    copy = tmp_path / "pkg" / package.name
+    shutil.copytree(package, copy, ignore=shutil.ignore_patterns("__pycache__"))
+
+    def run():
+        env = {**os.environ, "PYTHONPATH": str(copy.parent)}
+        cmd = [sys.executable, "-m", f"{package.name}.cli", "streams", "--split", "train", "--root", str(fetched.root)]
+        done = subprocess.run(cmd, env=env, capture_output=True, text=True, check=True)
+        return done.stdout.splitlines()[0]
+
+    assert "[detected]" in run()
+    assert "[cached]" in run()  # a fresh interpreter derives the same key from unchanged code
+    with open(copy / "streams.py", "a") as f:
+        f.write("\n# an edit to the detector\n")
+    assert "[detected]" in run()
+    assert "[cached]" in run()
