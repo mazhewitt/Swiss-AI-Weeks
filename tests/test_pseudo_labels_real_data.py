@@ -60,5 +60,8 @@ def test_the_fidelity_check_on_train_chooses_and_records_the_labeller_settings(t
     assert none_share == pytest.approx(PSEUDO_NONE_SHARE, abs=0.005)
     assert row["verdict"] == "pass" and out.rstrip().endswith("PASS")
 
+    kept = tmp_path / "experiments" / "fidelity" / f"{row['run_id']}.csv"
+    assert sum(1 for _ in open(kept)) == 198 + 1  # every setting's verdict, plus the header
+
     table = tmp_path / "artifacts" / "pseudo_labels" / "train-2025-10-03-min3-churn0.2.csv"
     assert sum(1 for _ in open(table)) == 2000 + 1  # one row per train Client, plus the header

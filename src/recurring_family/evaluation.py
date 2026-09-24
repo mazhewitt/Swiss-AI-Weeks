@@ -1,6 +1,7 @@
 """Macro-F1 over the fixed label set, per-family F1, the paired bootstrap and the experiment log."""
 
 import csv
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -85,14 +86,72 @@ def verdict(comparison: dict[str, float]) -> str:
     return "tie"
 
 
-def latest_fidelity(log_path: Path) -> dict | None:
-    """The latest Pseudo-Label fidelity check in the log, {run_id, verdict}, or None if none is logged."""
+# every labeller setting a fidelity check evaluated, one file per check: `<settings_dir>/<run_id>.csv`
+FIDELITY_SETTING_COLUMNS = [
+    "cutoff", "min_payments", "min_payments_before", "churn", "none_share", "rule_macro_f1", "none_gap", "rule_gap",
+    "verdict",
+]
+_DEFAULT_STREAM_PARAMS = "labeller stream params defaults"
+
+
+def write_fidelity_settings(path: Path, rows: list[dict]) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=FIDELITY_SETTING_COLUMNS)
+        writer.writeheader()
+        writer.writerows({k: row.get(k, "") for k in FIDELITY_SETTING_COLUMNS} for row in rows)
+
+
+def fidelity_of(
+    log_path: Path, settings_dir: Path, cutoff: str, setting: tuple[int, int, float]
+) -> dict | None:
+    """The verdict of the latest logged fidelity check that evaluated this labeller `setting`
+    (min_payments, min_payments_before, churn) at Shifted Cutoff `cutoff` (YYYY-MM-DD) with the default
+    stream parameters, as {run_id, verdict}; None if no check did.
+
+    A check's per-setting verdicts are read from `settings_dir/<run_id>.csv`. A check logged without
+    that file (before ticket 08's fix) counts only for the setting it chose, read from its `change`.
+    """
     log_path = Path(log_path)
     if not log_path.exists():
         return None
     with open(log_path, newline="") as f:
         rows = [r for r in csv.DictReader(f) if r.get("row_type") == "fidelity"]
-    return {"run_id": rows[-1]["run_id"], "verdict": rows[-1]["verdict"]} if rows else None
+    for row in reversed(rows):
+        if _DEFAULT_STREAM_PARAMS not in row.get("change", ""):
+            continue
+        path = Path(settings_dir) / f"{row['run_id']}.csv"
+        if path.exists():
+            with open(path, newline="") as f:
+                evaluated = [
+                    (
+                        r["cutoff"], (int(r["min_payments"]), int(r["min_payments_before"]), float(r["churn"])),
+                        r["verdict"],
+                    )
+                    for r in csv.DictReader(f)
+                ]
+        else:
+            chosen = _chosen_setting(row["change"])
+            evaluated = [] if chosen is None else [(chosen[0], chosen[1], row["verdict"])]
+        for evaluated_cutoff, evaluated_setting, verdict in evaluated:
+            if evaluated_cutoff == cutoff and _same_setting(evaluated_setting, setting):
+                return {"run_id": row["run_id"], "verdict": verdict}
+    return None
+
+
+def _chosen_setting(change: str) -> tuple[str, tuple[int, int, float]] | None:
+    """(Shifted Cutoff, chosen setting) from a fidelity row's `change`; ticket 04's rows name min_payments only."""
+    cutoff = re.search(r"Shifted Cutoff (\d{4}-\d{2}-\d{2})", change)
+    chosen = re.search(r"min_payments (\d+)(?:, min_payments_before (\d+), churn ([0-9.]+))? \(chosen from", change)
+    if cutoff is None or chosen is None:
+        return None
+    before, churn = chosen.group(2), chosen.group(3)
+    return cutoff.group(1), (int(chosen.group(1)), int(before or 0), float(churn or 0.0))
+
+
+def _same_setting(a: tuple[int, int, float], b: tuple[int, int, float]) -> bool:
+    return a[0] == b[0] and a[1] == b[1] and abs(a[2] - b[2]) < 1e-9
 
 
 def previous_best(log_path: Path, *, row_type: str, split: str) -> dict | None:

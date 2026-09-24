@@ -25,8 +25,8 @@ from .streams import LabellerParams
 
 NONE_SHARE_TOLERANCE = 0.05
 RULE_F1_TOLERANCE = 0.05
-# the labeller settings the check chooses among: every combination of these, bar the ones that
-# repeat another (a minimum in all at or below the minimum before the Shifted Cutoff never binds)
+# the labeller settings the check chooses among: every combination of these, each once (`search_space`:
+# a minimum in all at or below the minimum before the Shifted Cutoff never binds)
 FIDELITY_CANDIDATES = tuple(range(2, 11))  # min_payments
 FIDELITY_BEFORE_CANDIDATES = (0, 1, 2, 3)  # min_payments_before
 FIDELITY_CHURN_CANDIDATES = (0.0, 0.1, 0.15, 0.2, 0.25, 0.3)  # churn
@@ -48,14 +48,15 @@ def search_space(
     min_payments_before: tuple[int, ...] = FIDELITY_BEFORE_CANDIDATES,
     churn: tuple[float, ...] = FIDELITY_CHURN_CANDIDATES,
 ) -> tuple[LabellerParams, ...]:
-    """Every combination, less those whose minimum in all never binds (`min_payments` at or below
-    `min_payments_before`: they repeat the setting with `min_payments_before + 1`), unless nothing else is left."""
-    every = [
-        LabellerParams(m, b, c)
+    """Every combination, each once. A minimum in all at or below the minimum before the Shifted Cutoff
+    never binds (a counted payment is in the Horizon, so its stream has at least `min_payments_before + 1`),
+    so such a combination is searched as the setting with `min_payments = min_payments_before + 1`, even
+    when that minimum is not among `min_payments`."""
+    every = (
+        LabellerParams(max(m, b + 1), b, c)
         for c, b, m in product(sorted(churn), sorted(min_payments_before), sorted(min_payments))
-    ]
-    binding = [s for s in every if s.min_payments > s.min_payments_before]
-    return tuple(binding or every)
+    )
+    return tuple(dict.fromkeys(every))
 
 
 @dataclass(frozen=True)

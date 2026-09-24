@@ -60,7 +60,7 @@ Hypotheses:
 
 - `churn` P: a share P of Clients have all their streams stop at the Shifted Cutoff and get `none`. Which Clients is a fixed hash draw per Client and Shifted Cutoff. So tables are reproducible, a larger share churns a superset of Clients, and a Client pooled at two Shifted Cutoffs churns at each independently. The share estimated directly from train is about 0.17 (long-stream Clients, above).
 - `min_payments_before` K: a stream's Horizon payment counts only if the stream has K payments before the Shifted Cutoff. 1 ignores streams that start inside the Horizon; 3 roughly means "already an Active Stream".
-- CLI: `rf pseudo-labels --min-payments-before K --churn P`. The fidelity check searches `--candidates` (min_payments, 2-10) × `--before-candidates` (0-3) × `--churn-candidates` (0, 0.1, 0.15, 0.2, 0.25, 0.3). That is 198 settings once repeats are dropped; ties go to the simplest setting. The ranker takes `--pseudo-min-payments-before` and `--pseudo-churn`, which are recorded in the metadata and in two new log columns.
+- CLI: `rf pseudo-labels --min-payments-before K --churn P`. The fidelity check searches `--candidates` (min_payments, 2-10) × `--before-candidates` (0-3) × `--churn-candidates` (0, 0.1, 0.15, 0.2, 0.25, 0.3). That is 198 settings, each searched once (a minimum in all at or below the minimum before is searched as `min_payments_before + 1`); ties go to the simplest setting. The ranker takes `--pseudo-min-payments-before` and `--pseudo-churn`, which are recorded in the metadata and in two new log columns.
 - Pooled Shifted Cutoffs already work (`--pseudo` repeated). They were not pursued, because the earlier Horizons are less like the real one (above).
 
 ## Outcome
@@ -77,6 +77,18 @@ Hypotheses:
 
 At 2025-10-03, 9 of the 198 settings pass, and every one has churn 0.15-0.25. No setting without churn passes there. The chosen churn (0.2) is close to the 0.17 estimated directly from long-stream Clients.
 
+**The PASS is weak evidence.** The check compares two marginals, and churn is uniform label noise: with two knobs (churn and min_payments) over 198 settings, matching two marginals is close to guaranteed. The chosen Pseudo-Labels match the `none` share and the rule's macro-F1, but not how the rule goes wrong (shares of train Clients):
+
+| | real | Pseudo-Labels, min_payments 3, churn 0.2 |
+|---|---|---|
+| rule predicts a family, label `none` | 0.148 | 0.141 |
+| rule predicts `none`, label a family | 0.072 | 0.178 |
+| rule predicts a family, label another family | 0.239 | 0.145 |
+| `none` share, longest surviving stream 3-4 payments | 0.731 | 0.299 |
+| `none` share, longest surviving stream 7+ payments | 0.170 | 0.221 |
+
+The rule macro-F1 matches only because these errors cancel. Uniform churn reproduces how many Clients churn, not which ones: really, young streams churn far more than long ones.
+
 **Ranker on train out of fold** (5 folds; sources train + unlabeled at 2025-10-03, weight 0.5; tuned = the decision layer fitted on the same out-of-fold rows; nested = fitted on 4 folds, applied to the 5th):
 
 | Pseudo-Labels | argmax | tuned | nested tuned |
@@ -85,8 +97,15 @@ At 2025-10-03, 9 of the 198 settings pass, and every one has churn 0.15-0.25. No
 | min_payments 3, churn 0.2 (check's choice) | 0.5222 (-0.026, 95% -0.043..-0.010) | 0.5916 (+0.010, -0.006..+0.025) | 0.5738 (+0.004, -0.012..+0.020) |
 | min_payments 4, churn 0.2 | 0.5365 (-0.012) | 0.5932 (+0.011) | 0.5734 (+0.004) |
 
-Churn raises every Client's `none` probability, so argmax says `none` too often, and the tuned `none` threshold undoes it. On the tuned decision, which `evaluate --decision tuned` scores, the check's choice was higher on train, so it got the one selection run.
+The train result is a tie: argmax is significantly worse (-0.026, 95% -0.043..-0.010), and the nested tuned figure is +0.004 (95% -0.012..+0.020). The non-nested tuned +0.010 is fitted and scored on the same rows. Churn raises every Client's `none` probability, so argmax says `none` too often, and the tuned `none` threshold undoes it. The selection run went ahead anyway, on the higher tuned point estimate; strictly, the ticket's gate ("only if the train result is better") was not met.
 
 **Selection set, run `20260924T215400-3a4f12`** (`ranker+pseudo+tuned`, min_payments 3, churn 0.2): macro-F1 0.5666. Against `20260924T171108-3251a4` (0.5735): delta -0.0069 (95% -0.0322 .. +0.0183), a **tie**. Predictions are in `experiments/runs/`.
 
-**Conclusion.** The Pseudo-Label task now looks like the real one on both of the check's figures, and the diagnosis explains why it did not before: the real Cutoff has churn that no Horizon inside the history has. However, Pseudo-Labels that match the real task did not make the ranker better. The train gain is within noise and argmax got worse, and on the selection set it ties (slightly below) the current setup. The defaults (`PSEUDO_MIN_PAYMENTS` 4, no churn, no minimum before) stay as they are. The churn is random by construction (the real churn looks unpredictable from the history: a flat 12-20% `none` across long streams). So it mainly recalibrates the `none` probability, and the tuned decision layer already did that. The real task's predictable part that Pseudo-Labels still miss is young streams (3-4 payments) that end in `none` 73% of the time. A stream-age-dependent stop model is the next idea, if Pseudo-Labels get another round.
+**Conclusion.** The diagnosis holds: the real Cutoff has churn that no Horizon inside the history has, and that is why the old Pseudo-Label task was easier. The labeller can now pass the fidelity check, but only on the two figures the check looks at. Uniform churn does not reproduce who churns (young streams far more than long ones), so these Pseudo-Labels are not faithful to the real task. The ranker trained on them ties the current setup on train (argmax worse, tuned within noise) and on the selection set (-0.0069, a tie). This says nothing either way about whether a truly faithful labeller would help: it was not built. The defaults (`PSEUDO_MIN_PAYMENTS` 4, no churn, no minimum before) stay as they are. A faithful labeller would need a stop model that depends on the stream (its age at the Shifted Cutoff, at least), and a fidelity check that compares the error profile above, not only the two marginals.
+
+## Fix round 1
+
+- A ranker trained with Pseudo-Labels is now noted with the fidelity verdict of its own settings, per `--pseudo` source: the latest check that evaluated that Shifted Cutoff and (min_payments, min_payments_before, churn) with the default stream parameters (`evaluation.fidelity_of`). Before, it took the last `fidelity` row whatever it checked, so default training was reported as passing (`20260924T214629-add1e5`) although min_payments 4 without churn failed there. Each check now keeps every setting's verdict in `experiments/fidelity/<run_id>.csv`. The two ticket-08 checks' files were written from their printed reports. Ticket 04's check, which has no such file, counts only for the setting it chose. Pooled sources: failed if any failed, unchecked if any is unchecked.
+- `search_space` no longer drops a minimum before that no larger min_payments is offered for: it searches it as `min_payments_before + 1`. The default space is unchanged (198 settings).
+- The two new log columns of the earlier Pseudo-Label runs (171108, 195225) are filled with their implied 0 and 0.
+- The Outcome and Conclusion no longer claim the Pseudo-Labels match the real task (see the error-profile table).

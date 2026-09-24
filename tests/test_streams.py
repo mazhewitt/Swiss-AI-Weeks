@@ -1028,6 +1028,31 @@ def test_a_client_churns_independently_at_each_shifted_cutoff():
     assert set(october[october == "none"].index) != set(july[july == "none"].index)
 
 
+@pytest.mark.parametrize(
+    "client, cutoff, draw",
+    [
+        ("C000001", "2025-10-03", 0.8190937198220566),
+        ("C000001", "2025-07-05", 0.44150060812978925),
+        ("U00042", "2025-10-03", 0.26297592712320134),
+    ],
+)
+def test_the_churn_draw_is_pinned_so_tables_never_change_between_interpreters(client, cutoff, draw):
+    # a draw from Python's salted hash() would differ between runs; these are sha1-based and fixed
+    tx_ = history(monthly(client, "gym membership", "7997", 66, "2025-01-03"))
+    at = pd.Timestamp(cutoff, tz="UTC")
+    assert pseudo_labels(tx_, at, churn=draw - 1e-9)[client] == "gym"
+    assert pseudo_labels(tx_, at, churn=draw + 1e-9)[client] == "none"
+
+
+def test_several_streams_that_start_inside_the_horizon_are_all_ignored_with_a_payment_needed_before():
+    rows = series("C1", "saas suite", "5734", 19, "2025-10-05", 3)
+    rows += series("C1", "cloud backup", "5732", 6.8, "2025-10-10", 3)
+    rows += series("C1", "audio streaming", "5812", 13.5, "2025-10-12", 6, every_days=14)
+    rows += series("C1", "gym membership", "7997", 66, "2025-01-10", 5)  # stopped in May: no Horizon payment
+    assert pseudo_labels(history(rows), SHIFTED)["C1"] == "software"
+    assert pseudo_labels(history(rows), SHIFTED, min_payments_before=1)["C1"] == "none"
+
+
 def test_churn_only_ever_turns_a_label_into_none():
     base = history(_horizon_histories())
     for churn in (0.3, 0.6, 0.9):

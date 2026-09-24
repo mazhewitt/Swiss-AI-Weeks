@@ -16,7 +16,9 @@ from . import decision as decision_layer
 from .comparison import Candidate, compare_candidates, summary_lines, to_markdown
 from .config import CUTOFF, HORIZON, LABEL_COLUMN, LABELS, MERCHANT_FAMILIES, SHIFTED_CUTOFF
 from .cross_validation import CV_FOLDS, out_of_fold_proba
-from .evaluation import append_log, latest_fidelity, log_row, paired_bootstrap, previous_best, score
+from .evaluation import (
+    append_log, fidelity_of, log_row, paired_bootstrap, previous_best, score, write_fidelity_settings,
+)
 from .fetch import fetch_data
 from .models import MODELS, predict_labels
 from .pseudo import (
@@ -70,6 +72,14 @@ class Paths:
 
     def run_predictions(self, run_id: str) -> Path:
         return self.runs / f"{run_id}.csv"
+
+    @property
+    def fidelity_checks(self) -> Path:
+        # committed next to the log, like the runs: every setting a logged fidelity check evaluated
+        return self.root / "experiments" / "fidelity"
+
+    def fidelity_settings(self, run_id: str) -> Path:
+        return self.fidelity_checks / f"{run_id}.csv"
 
     @property
     def valid_split(self) -> Path:
@@ -380,6 +390,20 @@ def _report_fidelity(args, paths: Paths, candidates: tuple[tuple, ...], settings
         row_type="fidelity", run_id=run_id,
     )
     row.update({"delta": f"{chosen.rule_gap:.4f}", "verdict": verdict.lower()})
+    # every setting's verdict, so a ranker trained on any of them is noted with its own (`_pseudo_training`)
+    write_fidelity_settings(
+        paths.fidelity_settings(run_id),
+        [
+            {
+                "cutoff": f"{args.cutoff:%Y-%m-%d}", "min_payments": s.min_payments,
+                "min_payments_before": s.labeller.min_payments_before, "churn": f"{s.labeller.churn:g}",
+                "none_share": f"{s.none_share:.4f}", "rule_macro_f1": f"{s.rule_macro_f1:.4f}",
+                "none_gap": f"{s.none_gap:.4f}", "rule_gap": f"{s.rule_gap:.4f}",
+                "verdict": "pass" if s.passed else "fail",
+            }
+            for s in fidelity.settings
+        ],
+    )
     append_log(paths.log, row)
 
 
@@ -421,9 +445,10 @@ def _fitted_on(with_selection: bool) -> list[str]:
 
 def _pseudo_training(args, paths: Paths) -> tuple[pd.DataFrame | None, dict | None]:
     """The Pseudo-Labelled training rows of `--pseudo` sources, and what they were: each source's split,
-    Shifted Cutoff and Pseudo-Labelled Clients, the weight, the labeller's minimum payments and the
-    latest fidelity check. Made from transactions only: no label file is read, so any split may be a
-    source. Each Client's Candidate Streams come from its transactions before the Shifted Cutoff."""
+    Shifted Cutoff, Pseudo-Labelled Clients and the latest fidelity check of these labeller settings at
+    that Cutoff, the weight, the labeller settings, and the checks as one. Made from transactions only:
+    no label file is read, so any split may be a source. Each Client's Candidate Streams come from its
+    transactions before the Shifted Cutoff."""
     if not getattr(args, "pseudo", None):
         return None, None
     weight = PSEUDO_WEIGHT if args.pseudo_weight is None else args.pseudo_weight
@@ -440,13 +465,28 @@ def _pseudo_training(args, paths: Paths) -> tuple[pd.DataFrame | None, dict | No
         # the same Client may be a source at two Shifted Cutoffs, or also real-labelled: keep them apart
         rows["client_id"] = f"{split}@{cutoff:%Y-%m-%d}:" + rows["client_id"].astype(str)
         parts.append(rows)
-        sources.append({"split": split, "cutoff": f"{cutoff:%Y-%m-%d}", "clients": int(len(labels))})
+        check = fidelity_of(
+            paths.log, paths.fidelity_checks, f"{cutoff:%Y-%m-%d}",
+            (labeller.min_payments, labeller.min_payments_before, labeller.churn),
+        )
+        sources.append({"split": split, "cutoff": f"{cutoff:%Y-%m-%d}", "clients": int(len(labels)), "fidelity": check})
     info = {
         "sources": sources, "weight": weight, "min_payments": labeller.min_payments,
         "min_payments_before": labeller.min_payments_before, "churn": labeller.churn,
-        "fidelity": latest_fidelity(paths.log),
+        "fidelity": _overall_fidelity([s["fidelity"] for s in sources]),
     }
     return pd.concat(parts, ignore_index=True), info
+
+
+def _overall_fidelity(checks: list[dict | None]) -> dict | None:
+    """The sources' fidelity checks as one: failed if any failed, unchecked (None) if any Shifted Cutoff
+    was never checked with these labeller settings, else passed. Run ids are joined by `;`."""
+    failed = [c for c in checks if c is not None and c["verdict"] != "pass"]
+    if failed:
+        return {"run_id": ";".join(dict.fromkeys(c["run_id"] for c in failed)), "verdict": "fail"}
+    if any(c is None for c in checks):
+        return None
+    return {"run_id": ";".join(dict.fromkeys(c["run_id"] for c in checks)), "verdict": "pass"}
 
 
 def _sources_text(pseudo: dict) -> str:
@@ -468,12 +508,15 @@ def _pseudo_text(pseudo: dict) -> str:
 def _fidelity_note(pseudo: dict) -> str:
     fidelity = pseudo["fidelity"]
     if fidelity is None:
-        return "no fidelity check logged: these Pseudo-Labels are not validated (run `pseudo-labels --fidelity`)"
+        return (
+            "no fidelity check logged for these Shifted Cutoffs and labeller settings: these Pseudo-Labels are not "
+            "validated (run `pseudo-labels --fidelity`)"
+        )
     if fidelity["verdict"] == "pass":
-        return f"the latest Pseudo-Label fidelity check {fidelity['run_id']} passed"
+        return f"the latest Pseudo-Label fidelity check of these settings, {fidelity['run_id']}, passed"
     return (
-        f"the latest Pseudo-Label fidelity check {fidelity['run_id']} failed: training ran anyway, "
-        "but this is not a validated setup"
+        f"the latest Pseudo-Label fidelity check of these settings, {fidelity['run_id']}, failed: training ran "
+        "anyway, but this is not a validated setup"
     )
 
 

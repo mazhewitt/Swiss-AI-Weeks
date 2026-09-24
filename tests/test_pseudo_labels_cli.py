@@ -333,6 +333,31 @@ def test_the_fidelity_check_skips_settings_that_repeat_another(fetched, capsys):
     )
     table = [tuple(line.split()[:3]) for line in out.splitlines() if line.strip()[:1].isdigit()]
     assert table == [("2", "0", "0"), ("3", "0", "0"), ("3", "2", "0")]
+    [row] = fidelity_log_rows(fetched)
+    assert "3 settings" in row["change"]
+
+
+def test_a_minimum_before_above_every_minimum_in_all_is_still_searched(fetched, capsys):
+    # three payments before the Shifted Cutoff need four in all: searched as min_payments 4, not dropped
+    fidelity_train(fetched)
+    _, out, _ = run(
+        fetched, capsys, "--split", "train", "--fidelity", "--candidates", "2,3", "--before-candidates", "3",
+        "--churn-candidates", "0",
+    )
+    table = [tuple(line.split()[:3]) for line in out.splitlines() if line.strip()[:1].isdigit()]
+    assert table == [("4", "3", "0")]
+
+
+def test_the_fidelity_check_keeps_every_settings_verdict_next_to_the_log(fetched, capsys):
+    fidelity_train(fetched)
+    run(fetched, capsys, "--split", "train", "--fidelity", "--candidates", "2,5", "--churn-candidates", "0,0.5")
+    [row] = fidelity_log_rows(fetched)
+    kept = read_rows(fetched.root / "experiments" / "fidelity" / f"{row['run_id']}.csv")
+    assert len(kept) == 2 * 4 * 2  # min_payments 2 with 2 or 3 payments before is searched as 3 or 4
+    assert {r["cutoff"] for r in kept} == {"2025-10-03"}
+    by_setting = {(r["min_payments"], r["min_payments_before"], r["churn"]): r for r in kept}
+    assert by_setting[("5", "0", "0")]["verdict"] == "pass" and by_setting[("5", "0", "0")]["none_share"] == "0.7500"
+    assert by_setting[("2", "0", "0")]["verdict"] == "fail" and by_setting[("2", "0", "0")]["rule_gap"] == "-0.0625"
 
 
 def test_the_fidelity_check_leaves_other_log_rows_and_best_runs_alone(fetched, capsys):
