@@ -28,6 +28,29 @@ TRANSACTION_DTYPES = {
 }
 
 
+class DataError(ValueError):
+    """A raw file does not have the shape the loaders promise."""
+
+
+# An explicit UTC designator or offset; naive timestamps are ambiguous and rejected.
+_TZ_SUFFIX = r"(?:Z|[+-]\d{2}:?\d{2})$"
+
+
+def _parse_utc_timestamps(raw: pd.Series, split: str) -> pd.Series:
+    text = raw.astype("string")
+    bad = text.isna() | ~text.str.contains(_TZ_SUFFIX, regex=True).fillna(False)
+    if not bad.any():
+        parsed = pd.to_datetime(text, utc=True, errors="coerce")
+        bad = parsed.isna()
+    if bad.any():
+        row = int(bad.to_numpy().nonzero()[0][0])
+        raise DataError(
+            f"{split} transactions: {int(bad.sum())} row(s) with a missing, malformed or naive "
+            f"timestamp (first at row {row}: {raw.iloc[row]!r}); expected ISO 8601 with Z or an offset"
+        )
+    return parsed
+
+
 def _check_split(split: str, allowed: tuple[str, ...]) -> None:
     if split not in allowed:
         raise ValueError(f"unknown split {split!r}; expected one of {allowed}")
@@ -43,7 +66,7 @@ def load_transactions(raw_dir: Path, split: str) -> pd.DataFrame:
         convert_dates=False,
     )
     df = df.astype(TRANSACTION_DTYPES)
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df["timestamp"] = _parse_utc_timestamps(df["timestamp"], split)
     return df
 
 

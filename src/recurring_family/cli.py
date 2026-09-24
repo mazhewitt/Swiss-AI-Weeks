@@ -37,6 +37,10 @@ def cmd_fetch_data(args, paths: Paths) -> int:
     zip_path = Path(args.zip) if args.zip else paths.root / DEFAULT_ZIP
     written = fetch_data(zip_path, paths.raw)
     print(f"fetch-data: {len(written)} file(s) written to {paths.raw}" + (f": {', '.join(written)}" if written else ""))
+    for split in data.SPLITS:
+        tx = data.load_transactions(paths.raw, split)
+        first, last = (t.strftime("%Y-%m-%dT%H:%M:%SZ") for t in (tx["timestamp"].min(), tx["timestamp"].max()))
+        print(f"  {split}: {tx['client_id'].nunique()} Clients, {len(tx)} transactions, {first} .. {last}")
     return 0
 
 
@@ -121,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
     except InvalidSubmission as e:
         print(f"invalid submission: {e}", file=sys.stderr)
         return 2
-    except FileNotFoundError as e:
+    except (FileNotFoundError, data.DataError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
 

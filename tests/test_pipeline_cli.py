@@ -151,3 +151,49 @@ def test_submit_check_rejects_wrong_column_names(fetched):
     path = fetched.root / "bad.csv"
     path.write_text("client_id,label\n" + "".join(f"{c},none\n" for c in TEST_IDS))
     assert fetched.run("submit", "--check", str(path)) != 0
+
+
+# --- fetch-data: typed load of every split ------------------------------------
+# Hand-counted from tests/fixtures/data/*.jsonl: every split spans the same
+# first/last timestamp; Client and transaction counts differ per split.
+
+
+def refetch_with(project, tmp_path, name, edit):
+    """Zip a copy of the fixture data with one file edited, then fetch-data it."""
+    from conftest import make_zip
+
+    src = tmp_path / "edited"
+    src.mkdir()
+    for p in FIXTURE_DATA.iterdir():
+        (src / p.name).write_bytes(p.read_bytes())
+    target = src / name
+    target.write_text(edit(target.read_text()))
+    return project.run("fetch-data", "--zip", str(make_zip(src, tmp_path / "edited.zip")))
+
+
+def test_fetch_data_reports_every_split_loaded_with_utc_timestamps(project, capsys):
+    assert project.run("fetch-data", "--zip", str(project.zip)) == 0
+    out = capsys.readouterr().out
+    span = "2025-09-05T10:00:00Z .. 2025-12-05T10:00:00Z"
+    assert f"train: 6 Clients, 30 transactions, {span}" in out
+    assert f"valid: 4 Clients, 20 transactions, {span}" in out
+    assert f"test: 3 Clients, 15 transactions, {span}" in out
+    assert f"unlabeled: 1 Clients, 5 transactions, {span}" in out
+
+
+def test_fetch_data_converts_offset_timestamps_to_utc(project, tmp_path, capsys):
+    # The last unlabeled transaction moved to 12:30 at +02:00, i.e. 10:30 UTC.
+    edit = lambda s: s.replace('"2025-12-05T10:00:00Z"', '"2025-12-05T12:30:00+02:00"')
+    assert refetch_with(project, tmp_path, "unlabeled_pretrain_transactions.jsonl", edit) == 0
+    out = capsys.readouterr().out
+    assert "unlabeled: 1 Clients, 5 transactions, 2025-09-05T10:00:00Z .. 2025-12-05T10:30:00Z" in out
+
+
+@pytest.mark.parametrize(
+    "bad", ['"2025-12-05T10:00:00"', '"not a date"', "null"], ids=["naive", "malformed", "missing"]
+)
+def test_fetch_data_fails_loudly_on_a_bad_timestamp(project, tmp_path, capsys, bad):
+    edit = lambda s: s.replace('"2025-12-05T10:00:00Z"', bad, 1)
+    assert refetch_with(project, tmp_path, "unlabeled_pretrain_transactions.jsonl", edit) == 1
+    err = capsys.readouterr().err
+    assert "unlabeled" in err and "timestamp" in err
