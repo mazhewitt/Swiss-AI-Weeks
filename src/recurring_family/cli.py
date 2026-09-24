@@ -22,6 +22,7 @@ from .models import MODELS, predict_labels
 from .pseudo import (
     FIDELITY_CANDIDATES, NONE_SHARE_TOLERANCE, PSEUDO_MIN_PAYMENTS, RULE_F1_TOLERANCE, fidelity_check, milestone2_rule,
 )
+from .blend import DEFAULT_RULE_WEIGHT
 from .ranker import PSEUDO_WEIGHT, pseudo_examples
 from .rules import DEFAULT_NONE_GATE, DEFAULT_ORDERING, ORDERINGS
 from .streams import StreamParams, cached_pseudo_labels, cached_streams
@@ -173,6 +174,16 @@ def positive_weight(text: str) -> float:
     if not weight > 0 or weight == float("inf"):
         raise argparse.ArgumentTypeError(f"expected a positive weight; got {text!r}")
     return weight
+
+
+def rule_weight(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a number between 0 and 1, not {text!r}") from None
+    if not 0.0 <= value <= 1.0:
+        raise argparse.ArgumentTypeError(f"the rule weight must be between 0 and 1, not {text}")
+    return value
 
 
 def min_payments(text: str) -> int:
@@ -398,13 +409,20 @@ def _fidelity_column(pseudo: dict | None) -> str:
 
 def _new_model(args, pseudo: pd.DataFrame | None = None, info: dict | None = None):
     """A fresh model; the rule baseline takes its ordering rule, `none`-gate and stream parameters from
-    `train`; the ranker pools any Pseudo-Labelled training rows into its fit."""
-    if args.model == "ranker" and pseudo is not None:
-        return MODELS["ranker"](pseudo=pseudo, pseudo_weight=info["weight"])
-    if args.model != "rules":
-        return MODELS[args.model]()
-    params = dataclasses.replace(StreamParams(), **dict(args.param))
-    return MODELS["rules"](ordering=args.ordering or DEFAULT_ORDERING, params=params, none_gate=args.none_gate)
+    `train` or `cv`; the ranker pools any Pseudo-Labelled training rows into its fit; the blend builds both
+    parts that way and mixes them by `--rule-weight`."""
+    if args.model in ("rules", "blend"):
+        params = dataclasses.replace(StreamParams(), **dict(args.param))
+        rules = MODELS["rules"](ordering=args.ordering or DEFAULT_ORDERING, params=params, none_gate=args.none_gate)
+        if args.model == "rules":
+            return rules
+    if args.model in ("ranker", "blend"):
+        ranker = MODELS["ranker"]() if pseudo is None else MODELS["ranker"](pseudo=pseudo, pseudo_weight=info["weight"])
+        if args.model == "ranker":
+            return ranker
+        weight = DEFAULT_RULE_WEIGHT if args.rule_weight is None else args.rule_weight
+        return MODELS["blend"](rules, ranker, weight)
+    return MODELS[args.model]()
 
 
 def cmd_train(args, paths: Paths) -> int:
@@ -458,7 +476,9 @@ def cmd_train(args, paths: Paths) -> int:
 
 def cmd_cv(args, paths: Paths) -> int:
     pseudo, info = _pseudo_training(args, paths)
-    make_model = MODELS[args.model] if info is None else (lambda: _new_model(args, pseudo, info))
+    def make_model():
+        return _new_model(args, pseudo, info)
+
     with data.training_run(with_selection=args.with_selection):
         transactions, labels = _training_data(paths, args.with_selection)
         # folds are drawn over the real-labelled Clients only; Pseudo-Labelled ones join every fold's fit
@@ -689,6 +709,27 @@ def cmd_submit(args, paths: Paths) -> int:
     return 0
 
 
+def _rule_arguments(p: argparse.ArgumentParser) -> None:
+    """The rule's settings, for `--model rules` and for the rule inside `--model blend`."""
+    p.add_argument(
+        "--ordering", choices=sorted(ORDERINGS),
+        help=f"rules and blend: which surviving stream to predict (default: {DEFAULT_ORDERING}, the projected next payment)",
+    )
+    p.add_argument(
+        "--param", type=stream_param, action="append", default=[], metavar="NAME=VALUE",
+        help="rules and blend: override one stream detection parameter of the rule (repeatable)",
+    )
+    p.add_argument(
+        "--none-gate", type=payment_count, nargs="?", const=DEFAULT_NONE_GATE, metavar="N",
+        help=f"rules and blend: predict none when the Client's longest surviving stream has at most N payments "
+        f"(off unless given; N defaults to {DEFAULT_NONE_GATE})",
+    )
+    p.add_argument(
+        "--rule-weight", type=rule_weight, metavar="W",
+        help=f"blend only: the rule's share of the blended probabilities, 0 to 1 (default {DEFAULT_RULE_WEIGHT})",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--root", default=".", help="project root (default: current directory)")
@@ -743,19 +784,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("train", parents=[common], help="fit a model on the train Clients")
     p.add_argument("--model", choices=sorted(MODELS), required=True)
     p.add_argument("--with-selection", action="store_true", help="also fit on the valid selection set (submission refit)")
-    p.add_argument(
-        "--ordering", choices=sorted(ORDERINGS),
-        help=f"rules only: which surviving stream to predict (default: {DEFAULT_ORDERING}, the projected next payment)",
-    )
-    p.add_argument(
-        "--param", type=stream_param, action="append", default=[], metavar="NAME=VALUE",
-        help="rules only: override one stream detection parameter (repeatable)",
-    )
-    p.add_argument(
-        "--none-gate", type=payment_count, nargs="?", const=DEFAULT_NONE_GATE, metavar="N",
-        help=f"rules only: predict none when the Client's longest surviving stream has at most N payments "
-        f"(off unless given; N defaults to {DEFAULT_NONE_GATE})",
-    )
+    _rule_arguments(p)
     p.add_argument(
         "--decision", choices=("argmax", "tuned"), default="argmax",
         help="tuned: also fit the E3 decision layer on out-of-fold probabilities",
@@ -763,7 +792,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--folds", type=int, default=CV_FOLDS, help="folds for the tuned decision layer's out-of-fold fit")
     p.add_argument(
         "--pseudo", type=pseudo_source, action="append", default=[], metavar="SPLIT[:YYYY-MM-DD]",
-        help="ranker only: also fit on this split's Clients Pseudo-Labelled at a Shifted Cutoff "
+        help="ranker and blend: also fit the ranker on this split's Clients Pseudo-Labelled at a Shifted Cutoff "
         f"(default {SHIFTED_CUTOFF:%Y-%m-%d}); repeatable. They are never scored out of fold",
     )
     p.add_argument(
@@ -781,9 +810,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--with-selection", action="store_true", help="cross-validate over train plus the selection set")
     p.add_argument("--folds", type=int, default=CV_FOLDS)
     p.add_argument("--out", metavar="CSV", help="default: <root>/artifacts/oof/<model>.csv")
+    _rule_arguments(p)
     p.add_argument(
         "--pseudo", type=pseudo_source, action="append", default=[], metavar="SPLIT[:YYYY-MM-DD]",
-        help="ranker only: also fit on this split's Clients Pseudo-Labelled at a Shifted Cutoff "
+        help="ranker and blend: also fit the ranker on this split's Clients Pseudo-Labelled at a Shifted Cutoff "
         f"(default {SHIFTED_CUTOFF:%Y-%m-%d}); repeatable. They are never scored out of fold",
     )
     p.add_argument(
@@ -849,11 +879,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.command == "train" and args.model != "rules" and (args.ordering or args.param or args.none_gate):
-        parser.error("--ordering, --param and --none-gate apply to --model rules only")
     if args.command in ("train", "cv"):
-        if args.pseudo and args.model != "ranker":
-            parser.error("--pseudo applies to --model ranker only")
+        if args.model not in ("rules", "blend") and (args.ordering or args.param or args.none_gate):
+            parser.error("--ordering, --param and --none-gate apply to --model rules and blend only")
+        if args.model != "blend" and args.rule_weight is not None:
+            parser.error("--rule-weight applies to --model blend only")
+        if args.pseudo and args.model not in ("ranker", "blend"):
+            parser.error("--pseudo applies to --model ranker and blend only")
         if not args.pseudo and (args.pseudo_weight is not None or args.pseudo_min_payments is not None):
             parser.error("--pseudo-weight and --pseudo-min-payments apply to --pseudo only")
         if len(set(args.pseudo)) < len(args.pseudo):
