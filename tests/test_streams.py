@@ -301,6 +301,30 @@ def test_refunded_payments_stay_in_the_stream_and_count_in_its_refund_rate():
     assert no_refunds.refund_rate == 0
 
 
+def test_each_refund_is_credited_only_to_the_stream_whose_family_and_amount_it_fits():
+    def refund(when, amount, description, mcc):
+        return tx("C1", when, amount, description, mcc, type_="refund", direction="in")
+
+    software = series("C1", "saas billing", "5734", 37.6, "2025-06-18", 6)
+    small_software = series("C1", "productivity suite", "5734", 12.5, "2025-07-02", 5)
+    gym = series("C1", "gym membership", "7997", 66, "2025-04-10", 8)
+    rows = software + small_software + gym
+    rows += [refund(software[i]["timestamp"] + 3 * DAY, 37.9, "saas billing core", "5734") for i in (1, 3, 4)]
+    rows += [refund(small_software[i]["timestamp"] + 2 * DAY, 12.4, "prod suite", "5734") for i in (0, 2)]
+    rows += [refund(gym[5]["timestamp"] + DAY, 66, "gym membership", "7997")]
+    # Subscription-described refunds that fit no stream of their own family are counted nowhere:
+    rows += [
+        refund("2025-08-20", 80, "saas billing", "5734"),  # a software refund at no software amount
+        refund("2025-08-22", 37.6, "gym membership", "7997"),  # a gym refund at the software amount
+    ]
+    streams = detect_streams(frame(rows)).set_index(["family", "median_amount"])
+    assert streams.n_payments.to_dict() == {("gym", 66): 8, ("software", 12.5): 5, ("software", 37.6): 6}
+    assert streams.n_refunds.to_dict() == {("gym", 66): 1, ("software", 12.5): 2, ("software", 37.6): 3}
+    assert streams.refund_rate.to_dict() == pytest.approx(
+        {("gym", 66): 1 / 8, ("software", 12.5): 2 / 5, ("software", 37.6): 3 / 6}
+    )
+
+
 # --- parameters ---------------------------------------------------------------
 
 
