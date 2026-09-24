@@ -1,0 +1,11 @@
+# Data and model artifacts (submissions/ and experiments/ are committed)
+/data/raw/
+/data/interim/
+/artifacts/
+
+# Python / uv
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
