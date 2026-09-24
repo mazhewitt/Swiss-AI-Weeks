@@ -17,6 +17,7 @@ from .cross_validation import CV_FOLDS, out_of_fold_proba
 from .evaluation import append_log, log_row, paired_bootstrap, previous_best, score
 from .fetch import fetch_data
 from .models import MODELS, predict_labels
+from .rules import DEFAULT_NONE_GATE, DEFAULT_ORDERING, ORDERINGS
 from .streams import StreamParams, cached_streams
 from .submission import InvalidSubmission, read_submission, validate, write_submission
 
@@ -121,6 +122,17 @@ def stream_param(text: str) -> tuple[str, object]:
         raise argparse.ArgumentTypeError(f"bad value for {name}: {value!r}") from None
 
 
+def payment_count(text: str) -> int:
+    """A positive whole number of payments (the `none`-gate threshold)."""
+    try:
+        n = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a positive number of payments; got {text!r}") from None
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"expected a positive number of payments; got {text!r}")
+    return n
+
+
 def cmd_streams(args, paths: Paths) -> int:
     params = dataclasses.replace(StreamParams(), **dict(args.param))
     table, cached = cached_streams(paths.raw, args.split, paths.streams, params=params)
@@ -157,13 +169,21 @@ def _fitted_on(with_selection: bool) -> list[str]:
     return ["train", "selection"] if with_selection else ["train"]
 
 
+def _new_model(args):
+    """A fresh model; the rule baseline takes its ordering rule, `none`-gate and stream parameters from `train`."""
+    if args.model != "rules":
+        return MODELS[args.model]()
+    params = dataclasses.replace(StreamParams(), **dict(args.param))
+    return MODELS["rules"](ordering=args.ordering or DEFAULT_ORDERING, params=params, none_gate=args.none_gate)
+
+
 def cmd_train(args, paths: Paths) -> int:
     with data.training_run(with_selection=args.with_selection):
         transactions, labels = _training_data(paths, args.with_selection)
-        model = MODELS[args.model]().fit(transactions, labels)
+        model = _new_model(args).fit(transactions, labels)
         if args.decision == "tuned":
             # fitted on out-of-fold probabilities of the training Clients only
-            oof = out_of_fold_proba(MODELS[args.model], transactions, labels, folds=args.folds)
+            oof = out_of_fold_proba(lambda: _new_model(args), transactions, labels, folds=args.folds)
             decision, fit_scores = decision_layer.fit(oof[list(LABELS)], labels)
     paths.artifacts.mkdir(parents=True, exist_ok=True)
     model.save(paths.model(args.model))
@@ -280,6 +300,7 @@ def cmd_evaluate(args, paths: Paths) -> int:
         labels = data.load_labels(paths.raw, split).set_index("client_id")[LABEL_COLUMN]
     predicted = _decide(proba, decision).reindex(labels.index)
     scores = score(labels, predicted)
+    diagnostics = model.diagnostics(transactions, labels, predicted) if hasattr(model, "diagnostics") else None
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:6]
     comparison = None
@@ -295,8 +316,8 @@ def cmd_evaluate(args, paths: Paths) -> int:
     predicted.rename("predicted").to_csv(out, index_label="client_id")
 
     row = log_row(
-        scores, change=args.change, model=args.model + _decision_name(args.decision), split=split, conclusion=args.conclusion,
-        row_type=row_type, run_id=run_id, comparison=comparison,
+        scores, change=args.change, model=args.model + getattr(model, "variant", "") + _decision_name(args.decision), split=split, conclusion=args.conclusion,
+        row_type=row_type, run_id=run_id, comparison=comparison, diagnostics=diagnostics,
     )
     append_log(paths.log, row)
     print(f"evaluate{' (checkpoint)' if args.checkpoint else ''}: {args.model} on {split} ({len(labels)} Clients)")
@@ -310,6 +331,11 @@ def cmd_evaluate(args, paths: Paths) -> int:
     print(f"  macro-F1 {scores['macro_f1']:.4f}")
     for label in LABELS:
         print(f"  {label:<10} F1 {scores[f'f1_{label}']:.4f}")
+    if diagnostics is not None:
+        print(
+            f"  coverage {diagnostics['coverage']:.4f} (true family among surviving streams), "
+            f"selection accuracy {diagnostics['selection_accuracy']:.4f} (given coverage)"
+        )
     return 0
 
 
@@ -354,6 +380,19 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("train", parents=[common], help="fit a model on the train Clients")
     p.add_argument("--model", choices=sorted(MODELS), required=True)
     p.add_argument("--with-selection", action="store_true", help="also fit on the valid selection set (submission refit)")
+    p.add_argument(
+        "--ordering", choices=sorted(ORDERINGS),
+        help=f"rules only: which surviving stream to predict (default: {DEFAULT_ORDERING}, the projected next payment)",
+    )
+    p.add_argument(
+        "--param", type=stream_param, action="append", default=[], metavar="NAME=VALUE",
+        help="rules only: override one stream detection parameter (repeatable)",
+    )
+    p.add_argument(
+        "--none-gate", type=payment_count, nargs="?", const=DEFAULT_NONE_GATE, metavar="N",
+        help=f"rules only: predict none when the Client's longest surviving stream has at most N payments "
+        f"(off unless given; N defaults to {DEFAULT_NONE_GATE})",
+    )
     p.add_argument(
         "--decision", choices=("argmax", "tuned"), default="argmax",
         help="tuned: also fit the E3 decision layer on out-of-fold probabilities",
@@ -407,7 +446,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command == "train" and args.model != "rules" and (args.ordering or args.param or args.none_gate):
+        parser.error("--ordering, --param and --none-gate apply to --model rules only")
     paths = Paths(Path(args.root))
     try:
         return args.func(args, paths)
