@@ -22,6 +22,10 @@ of matching amount made shortly before it. Each payment is reversed at most once
 Each stream also reports its most common MCC and description (words lower-cased, abbreviations
 expanded) and the share of its payments whose description is family-specific: a family keyword
 names exactly one family, unlike an ambiguous description or a Filler Description.
+
+`pseudo_labels` gives each Client's Pseudo-Label at a Shifted Cutoff: the Merchant Family of the
+first Recurring Stream payment in its Horizon, or `none`. Streams for it are detected over the whole
+known history, so a stream that starts inside the Horizon counts once it has repeated.
 """
 
 from __future__ import annotations
@@ -36,7 +40,7 @@ import numpy as np
 import pandas as pd
 
 from . import data
-from .config import CUTOFF
+from .config import CUTOFF, HISTORY_END, HORIZON, LABEL_COLUMN, NONE_LABEL, SHIFTED_CUTOFF
 
 MUSIC_OR_STREAMING = "music_or_streaming"  # detection group for MCC 5812 before the split
 
@@ -173,14 +177,9 @@ def detect_streams(
     params: StreamParams = StreamParams(),
 ) -> pd.DataFrame:
     """One row per Recurring Stream, for every Client in `transactions` (columns: `COLUMNS`)."""
-    tx = transactions[transactions["timestamp"] < cutoff]
-    payments = tx[(tx["type"] == "card_payment") & (tx["direction"] == "out")]
-    refunds = tx[(tx["type"] == "refund") & (tx["direction"] == "in")]
-
     rows = []
-    for client, group in payments.groupby("client_id", sort=True):
-        client_refunds = refunds[refunds["client_id"] == client]
-        rows.extend(_client_streams(str(client), group, client_refunds, cutoff, params))
+    for _, _, client_rows, _ in _detect_per_client(transactions, cutoff, params):
+        rows.extend(client_rows)
     table = pd.DataFrame(rows, columns=COLUMNS)
     return table.astype(
         {
@@ -203,6 +202,18 @@ def detect_streams(
             "family_description_share": "float64",
         }
     )
+
+
+def _detect_per_client(transactions, cutoff, params):
+    """Per Client with a payment before `cutoff`: (client, payments, stream rows, membership), where
+    membership gives each payment's `stream_id`, or -1 for a payment in no stream."""
+    tx = transactions[transactions["timestamp"] < cutoff]
+    payments = tx[(tx["type"] == "card_payment") & (tx["direction"] == "out")]
+    refunds = tx[(tx["type"] == "refund") & (tx["direction"] == "in")]
+    for client, group in payments.groupby("client_id", sort=True):
+        client_refunds = refunds[refunds["client_id"] == client]
+        rows, membership = _client_streams(str(client), group, client_refunds, cutoff, params)
+        yield str(client), group, rows, membership
 
 
 def _client_streams(client, payments, refunds, cutoff, params):
@@ -317,11 +328,13 @@ def _client_streams(client, payments, refunds, cutoff, params):
         row["mcc"] = _most_common(mcc[members])
         row["description"] = _most_common(descriptions[members])
         row["family_description_share"] = float(specific[members].mean())
-        out.append(row)
-    out.sort(key=lambda r: (r["family"], r["median_amount"], r["first_payment"]))
-    for n, r in enumerate(out):
+        out.append((row, s))
+    out.sort(key=lambda rs: (rs[0]["family"], rs[0]["median_amount"], rs[0]["first_payment"]))
+    membership = np.full(len(stream_of), -1)
+    for n, (r, s) in enumerate(out):
         r["stream_id"] = n
-    return out
+        membership[stream_of == s] = n
+    return [r for r, _ in out], membership
 
 
 def _most_common(values) -> str:
@@ -401,6 +414,53 @@ def _summarise(client, family, times, amounts, n_refunds, cutoff, params) -> dic
         "n_refunds": int(n_refunds),
         "refund_rate": float(n_refunds) / n,
     }
+
+
+# --- Pseudo-Labels ------------------------------------------------------------
+
+
+def pseudo_labels(
+    transactions: pd.DataFrame,
+    cutoff: pd.Timestamp = SHIFTED_CUTOFF,
+    horizon: pd.Timedelta = HORIZON,
+    min_payments: int = 2,
+    params: StreamParams = StreamParams(),
+) -> pd.Series:
+    """Each Client's Pseudo-Label at `cutoff`, indexed by `client_id` (sorted), for every Client in
+    `transactions`: the Merchant Family of its first payment in the Horizon (from `cutoff` up to, not
+    including, `cutoff + horizon`) that belongs to a Recurring Stream of at least `min_payments`
+    payments, or `none`.
+
+    Streams are detected over the Client's whole known history, before and after `cutoff`, so a
+    stream that starts inside the Horizon counts once it has repeated. Decoy Transactions, shop
+    payments and refunds never join a stream; a one-off payment forms a stream too short to count;
+    a Filler Description that joins a stream takes that stream's family. A Horizon that ends after
+    the last observed day is refused: its Pseudo-Labels would come from a partly observed Horizon.
+    """
+    end = cutoff + horizon
+    if end > HISTORY_END:
+        last_day = (HISTORY_END - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        raise ValueError(
+            f"the {horizon.days}-day Horizon after Shifted Cutoff {cutoff:%Y-%m-%d} runs past the last "
+            f"observed day ({last_day}), so its Pseudo-Labels would come from a partly observed Horizon; "
+            f"the latest Shifted Cutoff is {HISTORY_END - horizon:%Y-%m-%d}"
+        )
+    if min_payments < 2:
+        raise ValueError(f"min_payments must be at least 2 (a Recurring Stream repeats), got {min_payments}")
+
+    clients = pd.Index(sorted(transactions["client_id"].astype(str).unique()), dtype="string", name="client_id")
+    labels = pd.Series(NONE_LABEL, index=clients, name=LABEL_COLUMN, dtype="string")
+    for client, payments, rows, membership in _detect_per_client(transactions, HISTORY_END, params):
+        family = np.array([r["family"] for r in rows] + [None], dtype=object)  # [-1] -> no stream
+        counts = np.array([r["n_payments"] for r in rows] + [0])
+        times = pd.DatetimeIndex(payments["timestamp"])
+        counted = (times >= cutoff) & (times < end) & (counts[membership] >= min_payments)
+        if counted.any():
+            # the earliest counted payment; simultaneous payments of two families go to the first by name
+            idx = np.flatnonzero(counted)
+            first = idx[np.lexsort((family[membership[idx]].astype(str), times.asi8[idx]))[0]]
+            labels[client] = family[membership[first]]
+    return labels
 
 
 # --- per-split cache ----------------------------------------------------------
