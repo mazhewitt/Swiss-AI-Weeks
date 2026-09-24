@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from .config import LABELS
+from .blend import BlendModel
 from .features import DescriptionRates, client_features, out_of_fold_description_rates
 from .ranker import RankerModel
 from .rules import RulesModel
@@ -147,7 +148,7 @@ def _out_of_fold_features(streams: pd.DataFrame, labels: pd.Series) -> pd.DataFr
     return client_features(streams, labels.index, out_of_fold_description_rates(streams, labels))
 
 
-MODELS: dict[str, type] = {"prior": PriorModel, "rules": RulesModel, "lgbm": LgbmModel, "ranker": RankerModel}
+MODELS: dict[str, type] = {"prior": PriorModel, "rules": RulesModel, "lgbm": LgbmModel, "ranker": RankerModel, "blend": BlendModel}
 
 
 def predict_labels(proba: pd.DataFrame) -> pd.Series:
