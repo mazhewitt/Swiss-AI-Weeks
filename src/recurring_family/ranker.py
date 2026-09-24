@@ -49,6 +49,7 @@ LGBM_PARAMS = {
     "random_state": 0,
     "deterministic": True,
     "force_row_wise": True,
+    "n_jobs": 1,  # small data: more threads only add overhead (30x slower here)
     "verbose": -1,
 }
 
