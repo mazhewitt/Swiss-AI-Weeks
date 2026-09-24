@@ -12,7 +12,11 @@ from .config import LABELS
 
 LOG_COLUMNS = [
     "date", "row_type", "run_id", "change", "model", "split", "macro_f1", *[f"f1_{l}" for l in LABELS],
-    "delta", "verdict", "compared_to", "coverage", "selection_accuracy", "conclusion",
+    "delta", "verdict", "compared_to", "coverage", "selection_accuracy",
+    # what the model was trained on: all Clients (real-labelled plus Pseudo-Labelled), the Pseudo-Label
+    # sources (split@Shifted Cutoff) and their settings, and the latest fidelity check when it was trained
+    "training_clients", "pseudo_sources", "pseudo_weight", "pseudo_min_payments", "fidelity",
+    "conclusion",
 ]
 
 TIE_MARGIN = 0.03
@@ -63,6 +67,16 @@ def verdict(comparison: dict[str, float]) -> str:
     if comparison["high"] < 0:
         return "worse"
     return "tie"
+
+
+def latest_fidelity(log_path: Path) -> dict | None:
+    """The latest Pseudo-Label fidelity check in the log, {run_id, verdict}, or None if none is logged."""
+    log_path = Path(log_path)
+    if not log_path.exists():
+        return None
+    with open(log_path, newline="") as f:
+        rows = [r for r in csv.DictReader(f) if r.get("row_type") == "fidelity"]
+    return {"run_id": rows[-1]["run_id"], "verdict": rows[-1]["verdict"]} if rows else None
 
 
 def previous_best(log_path: Path, *, row_type: str, split: str) -> dict | None:
