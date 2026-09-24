@@ -2,6 +2,42 @@
 
 Our entry for the 2026 challenge (`hackathons/2026/challenge.md`). Glossary: `CONTEXT.md`. Decisions: `docs/adr/`. The organisers' `README.md` and `hackathons/` are never edited.
 
+## Approach in brief
+
+1. **Recurring Streams first.** A rule-based detector (`streams.py`) turns each Client's card payments into Recurring Streams. For each stream it records the Merchant Family, period, amount, payment count, last payment and projected next payment. Decoy Transactions drift sharply between splits: 0.16 per Client in train, 3.1 in valid and 4.5 in test. So every model feature comes from detected streams, never from raw transaction counts (ADR 0001).
+2. **Stream Ranker.** Every stream is a Candidate Stream, and a LightGBM binary model scores how likely it is to carry the Client's Next Recurring Family. Each family takes its best candidate's score.
+3. **Pseudo-Labels.** Clients from the unlabelled and train splits are labelled from their own later payments at a Shifted Cutoff (2025-10-03), and they join the ranker's training rows at half weight.
+4. **Client-level `none` model.** About 30% of Clients are `none`, and most of them still have a live stream. Whether a Client is `none` depends on the Client, not on one stream's timing. So a second LightGBM model predicts `none` per Client from stream and member-payment features.
+5. **Decision layer.** Per-label weights and a `none` threshold, fitted on out-of-fold probabilities, tune the decision for macro-F1.
+
+## How we evaluated
+
+- **Our split of the labelled valid Clients:** a 700-Client selection set, used for every decision, and a 300-Client sealed holdout that no agent or script reads. Only a human can start the holdout check, once, for the finalist.
+- **Every change is logged in `experiments/log.csv`:** its selection macro-F1 plus a paired bootstrap against the previous best, with the predictions committed under `experiments/runs/`.
+- **What counts as a tie:** a delta under 0.03 macro-F1. That is a little more than the half-width of the paired 95% bootstrap interval, about 0.025 on 700 Clients.
+- **Where choices are made:** hyperparameters, feature sets and decision layers are chosen on train out-of-fold only.
+
+## Results on the selection set (700 Clients)
+
+| Run | Model | Macro-F1 | vs previous best |
+|---|---|---|---|
+| `134044-2e6cd3` | all `none` | 0.057 | – |
+| `143300-7c79fe` | LightGBM on per-Client stream features (E2) | 0.472 | improvement |
+| `151636-c6fcf8` | rule: the soonest Active Stream (E1) | 0.537 | improvement |
+| `151704-615cf5` | rule + `none`-gate (milestone 2) | 0.549 | tie |
+| `154434-ee87f3` | Stream Ranker, tuned decision | 0.571 | improvement |
+| `171108-3251a4` | + Pseudo-Labels (Day-2 12:00 upload) | 0.574 | tie |
+| `195225-27531a` | blend of the rule and the ranker | 0.573 | tie |
+| `215400-3a4f12` | + Pseudo-Labels with churn (fidelity check passes) | 0.567 | tie |
+| `225229-cc7243` | + Client-level `none` model | 0.576 | tie |
+
+## What we learned
+
+- **Choosing among live streams is limited by timing jitter.** When a Client has several live streams, the soonest projected payment is right 60% of the time, and every other ordering is at chance. Ticket 06's error analysis showed this, and the blend of rule and ranker (ticket 07) added nothing.
+- **`none` is the main lever.** Setting every live-stream truth-`none` Client to `none` would lift train macro-F1 from 0.58 to 0.69. Classic churn signals (an overdue stream, a missed or late last payment, a final refund) are near chance. A Client-level model on per-Client stream aggregates lifts the `none` AUC from 0.69 to 0.88 (`experiments/analysis/churn/`).
+- **Pseudo-Labels can't teach `none`.** Inside the history only 3–5% of live streams stop within 90 days, but at the real Cutoff 23% of live-stream Clients are `none`. A Pseudo-Labeller with uniform churn passes the fidelity check, but it is label noise, not signal (ticket 08).
+- **Train gains shrink on valid and test because the stream features drift.** Filler Descriptions are far more common in valid and test, and they break streams apart. `max_missed_rate` averages 0.07 in train, 0.13 in valid and 0.17 in test. The `none` model's +0.040 on train became +0.003 on selection. Ticket 11 goes after the cause.
+
 ## Setup
 
 ```sh
@@ -25,7 +61,7 @@ uv run rf train --model rules --none-gate
 uv run rf submit --model rules --name milestone2_rules_none_gate_v2
 ```
 
-The Day-2 12:00 milestone submission is made by `bash scripts/day2_noon_milestone.sh`: `rf compare` over the rule, ranker and ranker-with-Pseudo-Labels runs on the selection set found a three-way tie, so the simplest candidate, the gated rule, was refit on train plus the selection set (`submissions/day2_noon_rules_gate4.csv`, with the comparison beside it in `day2_noon_rules_gate4.md`).
+For the Day-2 12:00 milestone, `rf compare` found a three-way tie between the rule, the ranker and the ranker with Pseudo-Labels on the selection set (`bash scripts/day2_noon_milestone.sh`, `submissions/day2_noon_rules_gate4.md`). That rule's test predictions are the milestone-2 file, and the final rank takes the best of all milestones. So the upload is the highest-scoring candidate instead, the ranker with Pseudo-Labels, refit on train plus the selection set: `bash scripts/day2_noon_ranker_pseudo.sh` writes `submissions/day2_noon_ranker_pseudo.csv`.
 
 - `streams --split valid` detects (or loads cached) Recurring Streams and prints a per-family summary. `--param NAME=VALUE` (repeatable) overrides one stream detection parameter, e.g. `--param amount_tolerance=0.08`. Each parameter set is cached separately under `artifacts/streams/`, and a change to the detector code, family table or raw data rebuilds.
 - `pseudo-labels --split <split> --cutoff <date>` writes each Client's Pseudo-Label at a Shifted Cutoff (default 2025-10-03, the latest whose 90-day Horizon is fully observed) to `artifacts/pseudo_labels/<split>-<cutoff>-min<N>.csv` (`client_id, cutoff_date, target_next_recurring_merchant`, like a label file) and prints the per-label counts and shares. It works for every split, valid and test included, because it reads transactions only: any label read while it runs is refused. `--min-payments N` is the payments a Recurring Stream needs for its Horizon payment to count (default 4, chosen by the fidelity check); `--param NAME=VALUE` overrides the labeller's stream detection. Tables are cached under `artifacts/pseudo_labels/cache/` by split, Shifted Cutoff, detector version and labeller parameters.
