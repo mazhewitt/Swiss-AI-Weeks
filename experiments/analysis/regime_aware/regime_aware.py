@@ -24,14 +24,17 @@ would serve clean tables: every Pseudo-Label and stream table here is detected f
 Stages (cached under artifacts/regime_aware/<candidate>/<domain>/, so they run as parallel processes):
 
     corrupt                           train and unlabeled at dose 1 (seed 0)
-    pseudo <candidate|B>              the candidate's Pseudo-Labelled rows (B: the bypass check only)
-    oof <candidate> <h0|h1|unsealed> <v2|surv>
+    pseudo <B|R1|R2|R1R2>             the candidate's Pseudo-Labelled rows (for B, also checked against rf's)
+    oof <B|R1|R2|R1R2> <h0|h1|unsealed> <v2|surv>
                                       weight-1 5-fold out-of-fold probabilities on the domain's labelled Clients
-    fit <candidate> <h0|h1|unsealed> <v2|surv>
+    fit <B|R1|R2|R1R2> <h0|h1|unsealed> <v2|surv>
                                       fit at weight 3, predict the domain's target (a half, or test)
     predict <candidate>               freeze the candidate's 700 rehearsal predictions (no label read to score)
     score                             the only stage that reads the selection labels to score (data.scoring())
     final                             the chosen candidate on the unsealed domain: the submission and checks
+
+B's rehearsal is not rerun (ticket 21's frozen file is its prediction set), but its final fit runs here like
+any candidate's, so the file does not depend on ticket 22's caches.
 
     uv run python experiments/analysis/regime_aware/regime_aware.py <stage> ...
 """
@@ -78,6 +81,7 @@ PSEUDO_WEIGHT = 0.5
 TRAIN_DOSE1_HASH = "a7708bc9684a"  # ticket 23's dose-1 train (noise_regime/results.json)
 CANDIDATES = {"R1": (True, False), "R2": (False, True), "R1R2": (True, True)}  # (corrupt, robust)
 ALL = ("B", *CANDIDATES)
+SETTINGS = {"B": (False, False), **CANDIDATES}  # B's final fit runs here too (its rehearsal is ticket 21's)
 B_REHEARSAL = Path("experiments") / "analysis" / "target_weight" / "predictions" / "rehearsal_w3.csv"
 SUBMISSION = "day2_postmortem_regime"
 UNSEALED_FILE = PATHS.submissions / "day2_final_unsealed.csv"
@@ -96,7 +100,7 @@ def content_hash(tx: pd.DataFrame) -> str:
 
 def stream_params(candidate: str) -> StreamParams | None:
     """The robust detector's settings for R2 and R1R2; None (every model's default) otherwise."""
-    return StreamParams(robust=True) if CANDIDATES.get(candidate, (False, False))[1] else None
+    return StreamParams(robust=True) if SETTINGS[candidate][1] else None
 
 
 # --- corruption (R1) ----------------------------------------------------------------------------------
@@ -181,15 +185,13 @@ def build_pseudo(corrupted: bool, params: StreamParams) -> tuple[pd.DataFrame, d
 
 
 def stage_pseudo(candidate: str) -> None:
+    corrupted, _ = SETTINGS[candidate]
+    rows, info = build_pseudo(corrupted, stream_params(candidate) or StreamParams())
     if candidate == "B":  # the bypass reproduces the rows `rf` pools from its caches, exactly
-        mine, _ = build_pseudo(False, StreamParams())
         hm.v2_factory()
         reference, _ = hm._PSEUDO
-        pd.testing.assert_frame_equal(mine.reset_index(drop=True), reference.reset_index(drop=True))
+        pd.testing.assert_frame_equal(rows.reset_index(drop=True), reference.reset_index(drop=True))
         print("pseudo B: the DataFrame bypass equals rf's pooled rows", flush=True)
-        return
-    corrupted, _ = CANDIDATES[candidate]
-    rows, info = build_pseudo(corrupted, stream_params(candidate) or StreamParams())
     rows.to_pickle(cache(candidate) / "pseudo.pkl")
     (cache(candidate) / "pseudo.json").write_text(json.dumps(info, indent=1))
     print(f"pseudo {candidate}: {len(rows)} rows {info}", flush=True)
@@ -242,7 +244,7 @@ def fit_set(candidate: str, domain: str, weight: int) -> tuple[pd.DataFrame, pd.
     """Ticket 21's (22's for `unsealed`) fit set, with train's rows corrupted for R1 and R1R2. Train's rows
     come first in it, in the raw file's order, so they are swapped for the corrupted table's."""
     tx, labels = tw.fit_set(domain, weight)
-    if CANDIDATES[candidate][0]:
+    if SETTINGS[candidate][0]:
         bad = split_transactions("train", True)
         n = len(bad)
         assert (tx["client_id"].iloc[:n].to_numpy() == bad["client_id"].to_numpy()).all()
@@ -361,13 +363,9 @@ def stage_final() -> None:
     result = json.loads(path.read_text())
     chosen = result["chosen"]
     expected = data.load_sample_submission(RAW)["client_id"]
-    if chosen == "B":  # ticket 22's unsealed fit is B's final: its cached probabilities, E3 refitted
-        pred = tw.rehearsal_decision("unsealed").apply(tw.averaged("unsealed", 3))
-        oof_rows = len(hm.read_proba(tw.cache("unsealed") / "oof_v2.csv"))
-    else:
-        pred = decision(chosen, "unsealed").apply(averaged(chosen, "unsealed"))
-        oof_rows = len(hm.read_proba(cache(chosen, "unsealed") / "oof_v2.csv"))
-        assert oof_rows == len(hm.read_proba(cache(chosen, "unsealed") / "oof_surv.csv")) == 3000, oof_rows
+    pred = decision(chosen, "unsealed").apply(averaged(chosen, "unsealed"))
+    oof_rows = len(hm.read_proba(cache(chosen, "unsealed") / "oof_v2.csv"))
+    assert oof_rows == len(hm.read_proba(cache(chosen, "unsealed") / "oof_surv.csv")) == 3000, oof_rows
     out = PATHS.submissions / f"{SUBMISSION}.csv"
     write_submission(pred, expected, out)
     ours = _file_labels(out, expected)
@@ -396,7 +394,7 @@ def main() -> None:
     s.add_argument("candidate", choices=ALL)
     for stage in ("oof", "fit"):
         s = sub.add_parser(stage)
-        s.add_argument("candidate", choices=sorted(CANDIDATES))
+        s.add_argument("candidate", choices=ALL)
         s.add_argument("domain", choices=DOMAINS)
         s.add_argument("model", choices=sorted(FACTORIES))
     s = sub.add_parser("predict")

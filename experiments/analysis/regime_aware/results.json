@@ -1,0 +1,207 @@
+{
+ "rehearsal": {
+  "B": {
+   "macro_f1": 0.6054,
+   "f1_cloud": 0.6294,
+   "f1_gym": 0.6082,
+   "f1_insurance": 0.6577,
+   "f1_mobile": 0.68,
+   "f1_music": 0.5075,
+   "f1_software": 0.5139,
+   "f1_streaming": 0.5778,
+   "f1_none": 0.6684,
+   "none_predicted": 169
+  },
+  "R1": {
+   "macro_f1": 0.588,
+   "f1_cloud": 0.6232,
+   "f1_gym": 0.5875,
+   "f1_insurance": 0.6108,
+   "f1_mobile": 0.6667,
+   "f1_music": 0.5038,
+   "f1_software": 0.5166,
+   "f1_streaming": 0.5571,
+   "f1_none": 0.6387,
+   "vs_B": {
+    "delta": -0.0173,
+    "low": -0.0355,
+    "high": -0.0005
+   },
+   "agree_B": 0.9229,
+   "none_predicted": 152
+  },
+  "R2": {
+   "macro_f1": 0.5995,
+   "f1_cloud": 0.5839,
+   "f1_gym": 0.5977,
+   "f1_insurance": 0.6242,
+   "f1_mobile": 0.6667,
+   "f1_music": 0.5333,
+   "f1_software": 0.5455,
+   "f1_streaming": 0.5616,
+   "f1_none": 0.6832,
+   "vs_B": {
+    "delta": -0.0058,
+    "low": -0.0358,
+    "high": 0.0236
+   },
+   "agree_B": 0.7786,
+   "none_predicted": 158
+  },
+  "R1R2": {
+   "macro_f1": 0.5962,
+   "f1_cloud": 0.6316,
+   "f1_gym": 0.5922,
+   "f1_insurance": 0.6104,
+   "f1_mobile": 0.6711,
+   "f1_music": 0.5161,
+   "f1_software": 0.5312,
+   "f1_streaming": 0.5401,
+   "f1_none": 0.6768,
+   "vs_B": {
+    "delta": -0.0092,
+    "low": -0.0403,
+    "high": 0.0207
+   },
+   "agree_B": 0.7771,
+   "none_predicted": 188
+  }
+ },
+ "chosen": "B",
+ "chosen_note": "no candidate beat B on the pooled rehearsal: B",
+ "scored_utc": "2026-09-25T16:04:37+00:00",
+ "final": {
+  "file": "submissions/day2_postmortem_regime.csv",
+  "candidate": "B",
+  "fit_set": "train (as the candidate transforms it) + all 1,000 valid Clients (ticket 22's unsealed domain), valid at weight 3",
+  "e3_fitted_on": "weight-1 5-fold out-of-fold probabilities, 3000 Clients",
+  "label_mix": {
+   "none": 265,
+   "cloud": 122,
+   "mobile": 122,
+   "gym": 108,
+   "insurance": 104,
+   "streaming": 98,
+   "software": 95,
+   "music": 86
+  },
+  "unsealed_label_mix": {
+   "none": 265,
+   "cloud": 122,
+   "mobile": 122,
+   "gym": 108,
+   "insurance": 104,
+   "streaming": 98,
+   "software": 95,
+   "music": 86
+  },
+  "agree_unsealed_file": 1.0,
+  "uploaded": false,
+  "written_utc": "2026-09-25T16:34:05+00:00"
+ },
+ "corruption": {
+  "train": {
+   "transactions": 147459,
+   "stream_payments": 35738,
+   "description_replaced": 18046,
+   "mcc_replaced": 4426,
+   "description_changed": 17890,
+   "mcc_changed": 4321,
+   "content_hash": "a7708bc9684a"
+  },
+  "unlabeled": {
+   "transactions": 749935,
+   "stream_payments": 181874,
+   "description_replaced": 92025,
+   "mcc_replaced": 22206,
+   "description_changed": 91493,
+   "mcc_changed": 21905,
+   "content_hash": "954c80d8f668"
+  }
+ },
+ "pseudo_labels": {
+  "B": {
+   "train": {
+    "none_share": 0.145
+   },
+   "note": "rf's pooled rows; the DataFrame bypass reproduces them exactly"
+  },
+  "R1": {
+   "train": {
+    "rows": 4442,
+    "none_share": 0.183
+   },
+   "unlabeled": {
+    "rows": 22653,
+    "none_share": 0.1675
+   }
+  },
+  "R2": {
+   "train": {
+    "rows": 6336,
+    "none_share": 0.1125
+   },
+   "unlabeled": {
+    "rows": 27241,
+    "none_share": 0.1033
+   }
+  },
+  "R1R2": {
+   "train": {
+    "rows": 6335,
+    "none_share": 0.1125
+   },
+   "unlabeled": {
+    "rows": 27192,
+    "none_share": 0.1039
+   }
+  }
+ },
+ "robust_detector_streams": {
+  "train": {
+   "default": {
+    "streams": 6507,
+    "single_payment_share": 0.179,
+    "active_per_client": 1.61
+   },
+   "robust": {
+    "streams": 7690,
+    "single_payment_share": 0.287,
+    "active_per_client": 1.73
+   }
+  },
+  "valid": {
+   "default": {
+    "streams": 3052,
+    "single_payment_share": 0.302,
+    "active_per_client": 1.38
+   },
+   "robust": {
+    "streams": 5895,
+    "single_payment_share": 0.559,
+    "active_per_client": 1.63
+   }
+  },
+  "test": {
+   "default": {
+    "streams": 2869,
+    "single_payment_share": 0.3,
+    "active_per_client": 1.37
+   },
+   "robust": {
+    "streams": 5693,
+    "single_payment_share": 0.567,
+    "active_per_client": 1.61
+   }
+  }
+ },
+ "checks": {
+  "train_dose1_equals_ticket23": true,
+  "default_detector_byte_identical": "stream tables and member payments of train, valid, test and unlabeled (Cutoff and Shifted Cutoff) hash identically to the previous code; the hail mary's rehearsal v2 and race target probabilities are reproduced byte for byte",
+  "B_rehearsal_reproduces_ticket21": true,
+  "B_final_intermediates_equal_ticket22": "oof_v2, oof_surv, target_v2_w3, target_surv_w3 byte-identical to artifacts/target_weight/unsealed",
+  "final_file_identical_to_unsealed_file": true,
+  "script_reproduces_file_byte_for_byte": true,
+  "rf_submit_check": "valid"
+ }
+}
