@@ -1,0 +1,58 @@
+{
+ "rehearsal": {
+  "w1": {
+   "macro_f1": 0.5971,
+   "f1_cloud": 0.6056,
+   "f1_gym": 0.6082,
+   "f1_insurance": 0.6405,
+   "f1_mobile": 0.6928,
+   "f1_music": 0.5113,
+   "f1_software": 0.4895,
+   "f1_streaming": 0.5714,
+   "f1_none": 0.6575
+  },
+  "w3": {
+   "macro_f1": 0.6054,
+   "f1_cloud": 0.6294,
+   "f1_gym": 0.6082,
+   "f1_insurance": 0.6577,
+   "f1_mobile": 0.68,
+   "f1_music": 0.5075,
+   "f1_software": 0.5139,
+   "f1_streaming": 0.5778,
+   "f1_none": 0.6684
+  }
+ },
+ "w3_vs_w1_paired_bootstrap": {
+  "delta": 0.0082,
+  "low": -0.0052,
+  "high": 0.0227
+ },
+ "rehearsal_agreement_w3_w1": 0.9543,
+ "final": {
+  "final_w1_vs_hailmary_A_label_agreement": 1.0,
+  "final_w1_vs_hailmary_A_max_abs_proba_diff": 0.0,
+  "final_w3_disagree_v2_file": 0.103,
+  "final_w1_disagree_v2_file": 0.102,
+  "final_w3_disagree_w1": 0.041,
+  "final_w3_label_mix": {
+   "none": 217,
+   "cloud": 135,
+   "mobile": 125,
+   "gym": 116,
+   "insurance": 113,
+   "software": 104,
+   "streaming": 99,
+   "music": 91
+  },
+  "final_written_utc": "2026-09-25T13:31:54+00:00"
+ },
+ "rule": {
+  "w3_beats_w1_pooled": true,
+  "w3_disagrees_v2_file_ge_10pct": true,
+  "ready_and_checked_by_1710_cest": true,
+  "checked_at": "2026-09-25T15:31:56+02:00 (uv run rf submit --check: valid)",
+  "verdict": "all three hold: the 17:30 upload is submissions/day2_final_target_weight.csv (w = 3)"
+ },
+ "claims": "tie: +0.0082 over w = 1 (95% -0.0052 .. +0.0227), below the 0.03 claims rule"
+}
