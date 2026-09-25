@@ -76,6 +76,40 @@ flowchart TB
 
 v2 held up on test, and the drift we feared did not cost it. The Survival Race scored 0.594 on test: 0.012 below v2. That reverses its +0.003 on selection, and both gaps are inside the noise of 700 and 1,000 Clients. The two candidates disagree on 16% of test Clients. Only the best upload counts, so both were uploaded.
 
+## Chasing 0.68
+
+On Day 2 another team reached 0.68 on the test leaderboard, against our 0.606. On 1,000 Clients that gap is more than twice the 95% half-width, so it is a real difference, not noise. We spent the afternoon asking where it could come from, under the same rules as the rest of the work: selection labels read once, after every prediction is frozen; paired bootstrap; the sealed holdout never read; no reverse-engineering of the data generator.
+
+**1. How big would the missing signal have to be?** A research round (a web search for published solutions to similar problems, then a simulation on our train out-of-fold probabilities) put a number on it.
+- The ceiling analysis already says the loss is in `none` and in picking the wrong stream.
+- We stacked synthetic `none` scores of known AUC onto the Survival Race's own P(none), which has AUC 0.908 on train:
+
+| Extra `none` signal (AUC on its own) | Train macro-F1 (nested, tuned) |
+|---|---|
+| none added | 0.639 |
+| 0.85 | 0.663 |
+| 0.90 | 0.672 |
+| 0.95 | 0.683 |
+| a perfect `none` signal | 0.725 |
+
+Test runs about 0.035 below train, so 0.68 on test needs an extra `none` signal with AUC around 0.97: close to perfect. Picking the wrong stream is a bigger pool in principle (+0.21 if perfect), but our survival probabilities are calibrated, and among streams whose timing is close the order is a coin flip.
+
+**2. What we checked** (tickets 16–19; each pre-registered, reviewed by adversarial critics, and scored on the 700 selection Clients):
+
+| Idea | Result on selection |
+|---|---|
+| Leaks (Client id, file order, timestamps) | none |
+| Description features (the Filler Descriptions mark `none` in train) | do not transfer: valid and test spray them over most Clients' real streams; even learned on valid-like data, +0.01 to +0.02 (a tie) |
+| Their trend over time (a burst before churn) | also train-only: test has no such burst |
+| Stack of the small same-direction gains (v2 + soft race average) | 0.592, below the hail mary |
+| Decision chosen on the batch itself by expected macro-F1 (no labels) | +0.007 on train; +0.003 on selection (a tie) |
+| **A `none` signal of valid/test's own** (ticket 18) | **found:** the Decoy share of card payments plus refund behaviour predict `none` with AUC 0.81 within the 700 selection Clients. Adding it to the stream features lifts the `none` AUC from 0.82 to 0.87 (paired DeLong p = 0.0002). Train has almost no Decoys, so no train-fitted model could learn it. |
+| That signal stacked onto the hail mary (ticket 19) | 0.597 against 0.598: `none` F1 rises from 0.668 to 0.693, but the family labels give back as much. The hail mary's own P(none) already has AUC 0.878 there, and the new features lift it only to 0.893. |
+
+**3. Conclusion.** Every honest route lands at 0.59–0.60 on selection. The one new signal is real but small against what the models already know. By the arithmetic above, 0.68 needs a near-perfect `none` signal, and none exists in behavioural features on this data. Whatever the other team does, it is outside what we allowed ourselves.
+
+**4. How we chose the last upload.** The 0.03 tie rule stays for every "better" claim here, but it is the wrong rule for choosing an upload. Only the best upload counts and v2's 0.606 is already locked in, so a worse upload costs nothing. Candidates therefore entered a pool if they beat v2 on selection and disagreed with v2's file on at least 10% of test Clients. They were ranked by the selection gain minus 1.7 paired standard errors, a correction for having tried about 15 things. The hail mary ranked first (−0.008), ahead of the `none` stacker (−0.010) and the batch decision (−0.010).
+
 ## What we learned
 
 - **Where it is timing jitter, average over it.** A stream's real next payment misses its projection by 3.6 days typically (leave-last-out on 27,101 train and unlabeled streams), so when two streams are projected within a few days a fixed race order is a guess. The soft race (ticket 14) jitters each stream's date by its own spread and averages the Survival Race exactly over every order. P(`none`) cannot change (it is Π (1 − s) whatever the order), so only the split among detected families moves: on train out-of-fold it fixes 24 of the 75 close-call Clients and breaks none, +0.006 nested tuned; on selection 0.599 against 0.590 for the hard race (a tie). Weighting the fit's rows by the same uncertainty lost (−0.010): a target-0 row for a stream due after the label's stream teaches "stopped" to streams that were most likely alive.
