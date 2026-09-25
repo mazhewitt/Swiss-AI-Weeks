@@ -75,7 +75,7 @@ flowchart TB
 | Survival Race, soft race order (`submissions/day2_final_survival_soft.csv`) | – | – |
 | Hail mary: v2 + Survival Race average, self-trained (ticket 14, hail mary) | – | – |
 | Hail mary A, valid Clients weighted 3× (ticket 21, `submissions/day2_final_target_weight.csv`) | – | – |
-| As ticket 21, fitted on train plus **all 1,000** valid Clients, the holdout unsealed (ticket 22, `submissions/day2_final_unsealed.csv`) | – (holdout used for training) | (17:30 upload) |
+| As ticket 21, fitted on train plus **all 1,000** valid Clients, the holdout unsealed (ticket 22, `submissions/day2_final_unsealed.csv`) | – (holdout used for training) | uploaded (score pending) |
 
 v2 held up on test, and the drift we feared did not cost it. The Survival Race scored 0.594 on test: 0.012 below v2. That reverses its +0.003 on selection, and both gaps are inside the noise of 700 and 1,000 Clients. The two candidates disagree on 16% of test Clients. Only the best upload counts, so both were uploaded.
 
