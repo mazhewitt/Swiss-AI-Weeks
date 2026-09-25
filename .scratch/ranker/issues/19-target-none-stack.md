@@ -42,8 +42,56 @@ Status: ready-for-agent
 
 ## Acceptance
 
-- [ ] `experiments/analysis/none_stack/` (script, frozen predictions, `results.json`)
-- [ ] The rehearsal table and the rule applied, recorded here
+- [x] `experiments/analysis/none_stack/` (script, frozen predictions, `results.json`)
+- [x] The rehearsal table and the rule applied, recorded here
 - [ ] The final file plus its script, validated with `rf submit --check`
 - [ ] Three critics; blocking findings fixed
-- [ ] The sealed holdout is never read
+- [x] The sealed holdout is never read
+
+## Result
+
+Scripts, frozen predictions and numbers: `experiments/analysis/none_stack/` (`base_test.py`, `stacking.py`,
+`none_stack.py`, `predictions/`, `results.json`); tests in `tests/test_none_stack.py`. Ran as pre-registered.
+
+**Train-only B on test.** `base_test.py` fits v2 and the hard race on train only with `hailmary.py`'s own
+factories and seeds, and predicts selection and test from the same fitted model. Its selection probabilities are
+**byte-identical** to `artifacts/hailmary/rehearsal/target_{v2,surv}.csv`, and B+E3 reproduces hail mary A's
+committed selection predictions (700/700) and ticket 17's row (0.5983, d +0.0111, SE 0.0110).
+
+**Labels.** Selection labels were read once for the stacker (the binary `none` target), inside
+`data.training_run(with_selection=True)`, for the 5x5 nested CV and the final fit; and once in `data.scoring()`,
+after `predictions/` was committed. The sealed holdout was never read.
+
+**Rehearsal** (700 selection Clients; paired bootstrap 2,000 resamples, seed 0; SE against v2):
+
+| Candidate | macro-F1 | d vs v2 [95%] | d vs B+E3 [95%] | SE | d̃ = d − 1.7·SE | test disagreement with v2 | F1 `none` |
+|---|---|---|---|---|---|---|---|
+| B+E3 (hail mary A) | 0.5983 | +0.0111 [−0.0099, +0.0327] | — | 0.0110 | −0.0076 | 0.104 | 0.668 |
+| B+D | 0.5956 | +0.0085 [−0.0131, +0.0301] | −0.0026 [−0.0149, +0.0097] | 0.0111 | −0.0103 | 0.102 | 0.661 |
+| N | 0.5974 | +0.0103 [−0.0132, +0.0341] | −0.0008 [−0.0200, +0.0185] | 0.0120 | −0.0101 | 0.166 | 0.693 |
+
+- The stacker lifts the out-of-fold `none` AUC from 0.878 (B) to 0.893 (P'), and N's `none` F1 from 0.668 to
+  0.693, but the families lose about as much. Net: N is 0.0008 below B+E3.
+- **Optimism:** the same 700 labels chose the raw block (ticket 18), so N's 0.5974 is optimistic; it does not
+  beat B+E3 even so.
+- P_B(none) = 1 on 31 selection and 54 test Clients (no detected streams); the guard splits their family mass
+  equally, and all of them stay `none` under N.
+
+**Upload rule.** The pool is ticket 17's (hail mary A, S+D, soft race, with its values) plus N and B+D (both
+qualify: d > 0, disagreement ≥ 10%). By d̃: hail mary A −0.0076, N −0.0101, B+D −0.0103, S+D −0.0126, soft race
+−0.0142. **The top is hail mary A: the 17:30 upload stays `submissions/day2_final_hailmary.csv`.**
+
+**Test** (N's file, written anyway: `submissions/day2_final_none_stack.csv`, from
+`scripts/day2_final_none_stack.sh`, `rf submit --check` valid). Label mix:
+
+| File | cloud | gym | insurance | mobile | music | software | streaming | `none` |
+|---|---|---|---|---|---|---|---|---|
+| N (train-only B + stack, D on test) | 109 | 106 | 102 | 118 | 92 | 106 | 97 | **270** |
+| B+D (train-only B, D on test) | 114 | 111 | 108 | 121 | 96 | 112 | 106 | 232 |
+| B+E3 (train-only B) | 112 | 110 | 121 | 122 | 94 | 95 | 99 | 247 |
+| hail mary file (committed, train+selection refit) | 128 | 117 | 114 | 126 | 95 | 104 | 102 | 214 |
+
+- N's `none` share on test is 27.0%, against the hail mary's 21.4%. The selection `none` rate is 29.3%
+  (205/700) and N predicts 173/700 (24.7%) there. Mean P'(none) is 0.280 on selection (out of fold) and 0.293 on
+  test: the within-domain ranks remove the Decoy share's level shift, so there is no large `none` jump. Part of
+  the gap to 214 is the train-only base (B+E3 on test already gives 247).
