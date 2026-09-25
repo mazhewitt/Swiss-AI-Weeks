@@ -85,9 +85,16 @@ def _policy(policy: _LabelPolicy):
         _POLICY.reset(token)
 
 
-def training_run(*, with_selection: bool = False):
-    """Inside a training run valid labels are off limits, except the selection set when refitting."""
-    return _policy(_LabelPolicy(stage="training", selection=with_selection, holdout=False))
+def training_run(*, with_selection: bool = False, with_holdout: bool = False):
+    """Inside a training run valid labels are off limits, except the selection set when refitting.
+
+    `with_holdout` (only with `with_selection`) is the unsealed mode: the user's explicit decision to fit
+    the final file on all labelled valid Clients, so the holdout (and full valid) labels may be read for
+    training. Nothing fitted in this mode can be scored on the holdout any more.
+    """
+    if with_holdout and not with_selection:
+        raise ValueError("with_holdout=True trains on all of valid: pass with_selection=True as well")
+    return _policy(_LabelPolicy(stage="training", selection=with_selection, holdout=with_holdout))
 
 
 def predicting():
@@ -119,7 +126,8 @@ def _guard_label_read(source: str) -> None:
         )
     if source == "train":
         return
-    if policy.stage == "training" and (source != "selection" or not policy.selection):
+    unsealed = source in ("holdout", "valid") and policy.holdout
+    if policy.stage == "training" and not unsealed and (source != "selection" or not policy.selection):
         raise LabelLeak(
             f"a training run tried to read valid labels ({source}); training uses train labels only"
             + ("" if source != "selection" else " (pass --with-selection to refit on train plus the selection set)")

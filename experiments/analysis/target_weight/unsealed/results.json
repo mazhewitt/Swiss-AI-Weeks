@@ -1,0 +1,28 @@
+{
+ "file": "submissions/day2_final_unsealed.csv",
+ "fit_set": "train + all 1,000 valid Clients (selection + unsealed holdout), valid at weight 3",
+ "e3_fitted_on": "weight-1 5-fold out-of-fold probabilities, 3000 Clients",
+ "disagree_v2_file": 0.116,
+ "none_count": 265,
+ "ticket21_none_count": 217,
+ "agree_ticket21_file": 0.934,
+ "label_mix": {
+  "none": 265,
+  "cloud": 122,
+  "mobile": 122,
+  "gym": 108,
+  "insurance": 104,
+  "streaming": 98,
+  "software": 95,
+  "music": 86
+ },
+ "rule": {
+  "disagrees_v2_file_ge_10pct": true,
+  "none_within_40_of_ticket21": false,
+  "agrees_ticket21_file_ge_85pct": true,
+  "passes_check_by_1710_cest": true
+ },
+ "verdict": "keep day2_final_target_weight.csv (the unsealed file fails the rule)",
+ "written_utc": "2026-09-25T14:04:36+00:00",
+ "checked_utc": "2026-09-25T14:04:39+00:00"
+}

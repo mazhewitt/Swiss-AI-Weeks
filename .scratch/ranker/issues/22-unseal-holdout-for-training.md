@@ -29,7 +29,24 @@ Otherwise, ticket 21's file stays. There is no claim, because there is no held-o
 
 ## Acceptance
 
-- [ ] The guard mode plus its test; `uv run pytest -q` passes
-- [ ] `experiments/analysis/target_weight/` extended, or `experiments/analysis/unsealed/`, plus `scripts/day2_final_unsealed.sh`, which reproduces the file byte for byte
-- [ ] The rule applied and recorded here
+- [x] The guard mode plus its test; `uv run pytest -q` passes
+- [x] `experiments/analysis/target_weight/` extended, or `experiments/analysis/unsealed/`, plus `scripts/day2_final_unsealed.sh`, which reproduces the file byte for byte
+- [x] The rule applied and recorded here
 - [ ] A critic (leakage and regression); blocking findings fixed
+
+## Result (15:52 CEST, rule applied as written)
+
+**Verdict: the rule fails on the `none` sanity bound, so ticket 21's file (`submissions/day2_final_target_weight.csv`) stays the 17:30 upload.** The unsealed file is written and valid, but it is not uploaded.
+
+| Condition | Value | Bound | Holds |
+|---|---|---|---|
+| 1. passes `rf submit --check` by 17:10 CEST | checked 15:52:31 CEST | by 17:10 | yes |
+| 2. disagreement with v2's file | 11.6% | at least 10% | yes |
+| 3a. test `none` count | 265 (ticket 21: 217, +48) | 177 to 257 | **no** |
+| 3b. agreement with ticket 21's file | 93.4% | at least 85% | yes |
+
+Label mix of the unsealed file: none 265, cloud 122, mobile 122, gym 108, insurance 104, streaming 98, software 95, music 86.
+
+Nothing was scored: no holdout label was read outside `data.training_run(with_selection=True, with_holdout=True)`. Numbers in `experiments/analysis/target_weight/unsealed/results.json`.
+
+**Implementation.** `data.training_run(with_selection=True, with_holdout=True)` is the new guard mode (holdout and full valid labels readable in training; `with_holdout` without `with_selection` is a `ValueError`); the existing modes are unchanged and their refusals are re-tested in `tests/test_honest_evaluation.py`. `target_weight.py` gains the `unsealed` domain (train plus all 1,000 valid Clients; the valid Clients are the weighted ones), the `oof unsealed` and `fit unsealed 3` stages, and the `unsealed` and `unsealed-checked` stages that write the file and apply this rule. E3 is fitted on the average of the weight-1 5-fold out-of-fold probabilities of the 3,000 Clients. `scripts/day2_final_unsealed.sh` clears stale outputs, runs the four fits in parallel, waits on each pid, writes the file, runs `rf submit --check` and records the verdict. A second full run of the script (16:02 to 16:04 CEST) rewrote the file byte for byte (`cmp` identical, and the four probability files too); `results.json` differs only in its two timestamps. `uv run pytest -q`: 547 passed.

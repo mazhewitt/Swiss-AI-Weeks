@@ -11,14 +11,23 @@ v2 and the Survival Race are fitted on train + the other half (weight 1, and wei
 out-of-fold probabilities of train + the other half, and half h is predicted. Final: train + all 700
 selection Clients; E3 is the hail mary's final one (its weight-1 out-of-fold files are reused).
 
+Unsealed (ticket 22): the final fit with the fit set = train + all 1,000 valid Clients (selection plus the
+holdout, unsealed by the user for training only), read inside `data.training_run(with_selection=True,
+with_holdout=True)`. E3 is fitted on the weight-1 5-fold out-of-fold probabilities of those 3,000 Clients;
+v2 and the Survival Race are fitted at weight 3 and predict test. Nothing is scored: there is no held-out
+valid data left, so the `unsealed` stage applies the ticket's pre-registered sanity rule instead.
+
 Stages (cached under artifacts/target_weight/, so they run as separate processes in parallel):
 
     halves                    the two fixed halves (reads selection labels inside a training run)
-    oof <h0|h1> <v2|surv>     weight-1 5-fold out-of-fold probabilities on train + the other half
-    fit <h0|h1|final> <1|3> <v2|surv>
+    oof <h0|h1|unsealed> <v2|surv>
+                              weight-1 5-fold out-of-fold probabilities on the domain's labelled Clients
+    fit <h0|h1|final|unsealed> <1|3> <v2|surv>
                               fit on the domain's labelled Clients at that weight, predict the target
     predict                   freeze both rehearsal prediction sets; write the final files and checks
     score                     the only stage that reads the selection labels to score (data.scoring())
+    unsealed                  ticket 22: write the unsealed file and apply its upload rule (no scoring)
+    unsealed-checked          ticket 22: record that `rf submit --check` passed, and when
 
     uv run python experiments/analysis/target_weight/target_weight.py <stage> ...
 """
@@ -55,9 +64,17 @@ CACHE = PATHS.artifacts / "target_weight"
 SEED = 0
 SUBMISSION = "day2_final_target_weight"
 V2_FILE = PATHS.submissions / "day2_final_ranker_none_v2.csv"
-DOMAINS = ("h0", "h1", "final")
+DOMAINS = ("h0", "h1", "final", "unsealed")
+UNSEALED = "day2_final_unsealed"
+UNSEALED_OUT = OUT / "unsealed"
+UNSEALED_DEADLINE_UTC = "2026-09-25T15:10:00+00:00"  # 17:10 CEST
 WEIGHTS = (1, 3)
 _DUP = re.compile(r"^dup\d+:")
+
+
+def training_guard(domain: str):
+    """The label policy of a domain's training: the unsealed domain alone may read the holdout's labels."""
+    return data.training_run(with_selection=True, with_holdout=domain == "unsealed")
 
 
 def cache(domain: str) -> Path:
@@ -127,9 +144,19 @@ def halves() -> dict[int, set[str]]:
 
 def fit_set(domain: str, weight: int) -> tuple[pd.DataFrame, pd.Series]:
     """The domain's labelled Clients, with each selection Client counted `weight` times. Labels are read
-    inside a training run only; in a rehearsal half, the held-out half's are dropped on load."""
-    with data.training_run(with_selection=True):
-        if domain == "final":
+    inside a training run only; in a rehearsal half, the held-out half's are dropped on load. In the
+    unsealed domain every valid Client (selection plus holdout) is a weighted Client."""
+    with training_guard(domain):
+        if domain == "unsealed":
+            labels = data.load_labels(PATHS.raw, "train").set_index("client_id")[LABEL_COLUMN]
+            valid = data.load_labels(PATHS.raw, "valid").set_index("client_id")[LABEL_COLUMN]
+            assert len(valid) == 1000 and not set(valid.index) & set(labels.index)
+            tx = data.load_transactions(PATHS.raw, "train")
+            valid_tx = data.load_transactions(PATHS.raw, "valid")
+            labels = pd.concat([labels, valid])
+            tx = pd.concat([tx, valid_tx[valid_tx["client_id"].isin(set(valid.index))]], ignore_index=True)
+            sel_ids = set(valid.index.astype(str))
+        elif domain == "final":
             tx, labels = hm._training_data(PATHS, with_selection=True)
             sel_ids = set(data.load_labels(PATHS.raw, "selection")["client_id"].astype(str))
         else:
@@ -161,7 +188,7 @@ def fit_set(domain: str, weight: int) -> tuple[pd.DataFrame, pd.Series]:
 
 
 def target(domain: str) -> tuple[pd.DataFrame, pd.Index]:
-    if domain == "final":
+    if domain in ("final", "unsealed"):
         return hm.target("final")
     ids = sorted(halves()[int(domain[1])])
     tx = data.load_transactions(PATHS.raw, "valid")
@@ -175,7 +202,7 @@ def target(domain: str) -> tuple[pd.DataFrame, pd.Index]:
 def stage_oof(domain: str, model: str) -> None:
     make = FACTORIES[model]()
     tx, labels = fit_set(domain, 1)
-    with data.training_run(with_selection=True):
+    with training_guard(domain):
         oof = out_of_fold_proba(make, tx, labels)
     oof.to_csv(cache(domain) / f"oof_{model}.csv")
     print(f"oof {domain} {model}: {len(oof)} Clients", flush=True)
@@ -184,7 +211,7 @@ def stage_oof(domain: str, model: str) -> None:
 def stage_fit(domain: str, weight: int, model: str) -> None:
     make = FACTORIES[model]()
     tx, labels = fit_set(domain, weight)
-    with data.training_run(with_selection=True):
+    with training_guard(domain):
         fitted = make().fit(tx, labels)
     target_tx, clients = target(domain)
     with data.predicting():
@@ -279,12 +306,71 @@ def stage_score() -> None:
     print(json.dumps(result, indent=1))
 
 
+def _file_labels(path: Path, expected: pd.Series) -> pd.Series:
+    return pd.read_csv(path, dtype=str, keep_default_na=False).set_index("client_id").iloc[:, 0].reindex(expected)
+
+
+def stage_unsealed() -> None:
+    """Ticket 22: E3 on the weight-1 out-of-fold probabilities of train + all valid, applied to the average of
+    the weight-3 fits; write the file and apply the pre-registered rule. No label is read to score."""
+    UNSEALED_OUT.mkdir(parents=True, exist_ok=True)
+    decision = rehearsal_decision("unsealed")
+    oof_rows = len(hm.read_proba(cache("unsealed") / "oof_v2.csv"))
+    assert oof_rows == len(hm.read_proba(cache("unsealed") / "oof_surv.csv")) == 3000, oof_rows
+    expected = data.load_sample_submission(PATHS.raw)["client_id"]
+    pred = decision.apply(averaged("unsealed", 3))
+    write_submission(pred, expected, PATHS.submissions / f"{UNSEALED}.csv")
+    ours = _file_labels(PATHS.submissions / f"{UNSEALED}.csv", expected)
+    t21 = _file_labels(PATHS.submissions / f"{SUBMISSION}.csv", expected)
+    v2 = _file_labels(V2_FILE, expected)
+    assert ours.notna().all() and t21.notna().all() and v2.notna().all()
+    none, t21_none = int((ours == NONE_LABEL).sum()), int((t21 == NONE_LABEL).sum())
+    disagree_v2 = float((ours != v2).mean())
+    agree_t21 = float((ours == t21).mean())
+    rule = {
+        "disagrees_v2_file_ge_10pct": disagree_v2 >= 0.10,
+        "none_within_40_of_ticket21": abs(none - t21_none) <= 40,
+        "agrees_ticket21_file_ge_85pct": agree_t21 >= 0.85,
+        "passes_check_by_1710_cest": None,  # filled in by `unsealed-checked` after `rf submit --check`
+    }
+    result = {
+        "file": f"submissions/{UNSEALED}.csv",
+        "fit_set": "train + all 1,000 valid Clients (selection + unsealed holdout), valid at weight 3",
+        "e3_fitted_on": f"weight-1 5-fold out-of-fold probabilities, {oof_rows} Clients",
+        "disagree_v2_file": round(disagree_v2, 4),
+        "none_count": none,
+        "ticket21_none_count": t21_none,
+        "agree_ticket21_file": round(agree_t21, 4),
+        "label_mix": {k: int(v) for k, v in ours.value_counts().items()},
+        "rule": rule,
+        "verdict": None,
+        "written_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    (UNSEALED_OUT / "results.json").write_text(json.dumps(result, indent=1))
+    print(json.dumps(result, indent=1))
+
+
+def stage_unsealed_checked() -> None:
+    """Run right after `rf submit --check` passed on the unsealed file: record when, and the verdict."""
+    path = UNSEALED_OUT / "results.json"
+    result = json.loads(path.read_text())
+    now = datetime.now(timezone.utc)
+    result["checked_utc"] = now.isoformat(timespec="seconds")
+    result["rule"]["passes_check_by_1710_cest"] = now <= datetime.fromisoformat(UNSEALED_DEADLINE_UTC)
+    upload = all(result["rule"].values())
+    result["verdict"] = (
+        f"upload {UNSEALED}.csv" if upload else f"keep {SUBMISSION}.csv (the unsealed file fails the rule)"
+    )
+    path.write_text(json.dumps(result, indent=1))
+    print(json.dumps(result, indent=1))
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = p.add_subparsers(dest="stage", required=True)
     sub.add_parser("halves")
     s = sub.add_parser("oof")
-    s.add_argument("domain", choices=("h0", "h1"))
+    s.add_argument("domain", choices=("h0", "h1", "unsealed"))
     s.add_argument("model", choices=sorted(FACTORIES))
     s = sub.add_parser("fit")
     s.add_argument("domain", choices=DOMAINS)
@@ -292,6 +378,8 @@ def main() -> None:
     s.add_argument("model", choices=sorted(FACTORIES))
     sub.add_parser("predict")
     sub.add_parser("score")
+    sub.add_parser("unsealed")
+    sub.add_parser("unsealed-checked")
     a = p.parse_args()
     if a.stage == "halves":
         stage_halves()
@@ -301,6 +389,10 @@ def main() -> None:
         stage_fit(a.domain, a.weight, a.model)
     elif a.stage == "predict":
         stage_predict()
+    elif a.stage == "unsealed":
+        stage_unsealed()
+    elif a.stage == "unsealed-checked":
+        stage_unsealed_checked()
     else:
         stage_score()
 

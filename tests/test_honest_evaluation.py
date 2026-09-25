@@ -139,6 +139,43 @@ def test_training_run_without_valid_reads_succeeds(fetched, leaky):
     assert fetched.run("train", "--model", "leaky") == 0
 
 
+# --- the unsealed mode: the user's explicit decision to train on all labelled valid Clients -------------
+
+
+def test_unsealed_training_run_reads_every_label_source(fetched):
+    with data.training_run(with_selection=True, with_holdout=True):
+        read = {source: data.load_labels(fetched.raw, source) for source in ("train", "selection", "holdout", "valid")}
+    ids = {source: set(df["client_id"]) for source, df in read.items()}
+    assert ids["selection"] | ids["holdout"] == ids["valid"] and not ids["selection"] & ids["holdout"]
+
+
+def test_unsealed_mode_requires_the_selection_set_too(fetched):
+    with pytest.raises(ValueError, match="with_selection"):
+        data.training_run(with_holdout=True)
+
+
+@pytest.mark.parametrize("source", ["holdout", "valid"])
+@pytest.mark.parametrize("with_selection", [False, True])
+def test_existing_training_modes_still_refuse_the_holdout(fetched, source, with_selection):
+    with data.training_run(with_selection=with_selection):
+        with pytest.raises(data.LabelLeak, match="valid labels"):
+            data.load_labels(fetched.raw, source)
+    with data.training_run():
+        with pytest.raises(data.LabelLeak, match="valid labels"):
+            data.load_labels(fetched.raw, "selection")
+
+
+@pytest.mark.parametrize("source", ["selection", "holdout", "valid"])
+def test_the_unsealed_mode_ends_with_its_block(fetched, source):
+    with data.training_run(with_selection=True, with_holdout=True):
+        data.load_labels(fetched.raw, source)
+        with data.predicting():
+            with pytest.raises(data.LabelLeak):
+                data.load_labels(fetched.raw, source)
+    with pytest.raises(data.LabelLeak):
+        data.load_labels(fetched.raw, source)
+
+
 class HoldoutPeeker(models.PriorModel):
     """Reads sealed-holdout labels while predicting."""
 
