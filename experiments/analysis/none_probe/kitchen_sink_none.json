@@ -1,0 +1,115 @@
+{
+ "streams only (the none model's features)": {
+  "auc": 0.888,
+  "top_features": {
+   "max_n_payments": 15421.0,
+   "stream_first_days": 7996.0,
+   "min_amount_cv": 6969.0,
+   "max_amount_cv": 6966.0,
+   "stream_activity_ratio60": 5052.0,
+   "stream_last_days": 4972.0,
+   "soonest_amount_cv": 4606.0,
+   "min_days_since_first": 4483.0,
+   "max_days_since_first": 3499.0,
+   "max_refund_rate": 3255.0,
+   "min_n_payments": 3158.0,
+   "stream_activity_ratio90": 2956.0,
+   "max_amount": 2933.0,
+   "n_short": 2904.0,
+   "max_expected_minus_actual": 2876.0
+  }
+ },
+ "raw kitchen sink": {
+  "auc": 0.8933,
+  "top_features": {
+   "w_subscription": 25252.0,
+   "last_family_named_days": 13044.0,
+   "last_refund_days": 7521.0,
+   "n_family_named_60": 3335.0,
+   "n_family_named": 3327.0,
+   "n_refund": 3039.0,
+   "n_card": 2839.0,
+   "w90_service": 2511.0,
+   "n_tx": 2493.0,
+   "mcc_5734": 2479.0,
+   "card_amount_mean": 2439.0,
+   "w90_plan": 2329.0,
+   "fee_sum": 2318.0,
+   "w90_member": 2230.0,
+   "w_member": 2139.0
+  }
+ },
+ "stray payments (pre-ticket-11 signal)": {
+  "auc": 0.6009,
+  "top_features": {
+   "stray_last_days": 23426.0,
+   "stray_n": 15546.0,
+   "stray_n_90": 9083.0
+  }
+ },
+ "streams + stray": {
+  "auc": 0.8893,
+  "top_features": {
+   "max_n_payments": 15255.0,
+   "stream_first_days": 7391.0,
+   "min_amount_cv": 6959.0,
+   "max_amount_cv": 6890.0,
+   "stream_activity_ratio60": 5110.0,
+   "stream_last_days": 4969.0,
+   "soonest_amount_cv": 4437.0,
+   "min_days_since_first": 4171.0,
+   "stray_n_90": 3435.0,
+   "max_days_since_first": 3346.0,
+   "max_refund_rate": 3247.0,
+   "stream_activity_ratio90": 3208.0,
+   "max_expected_minus_actual": 3134.0,
+   "max_amount": 3091.0,
+   "min_n_payments": 3070.0
+  }
+ },
+ "streams + raw": {
+  "auc": 0.936,
+  "top_features": {
+   "w_subscription": 23459.0,
+   "max_n_payments": 9894.0,
+   "stream_last_days": 8420.0,
+   "min_amount_cv": 5455.0,
+   "last_refund_days": 5364.0,
+   "stream_first_days": 5005.0,
+   "max_days_since_first": 4352.0,
+   "n_refund": 2660.0,
+   "w90_plan": 2532.0,
+   "min_refund_rate": 2267.0,
+   "min_days_since_first": 2157.0,
+   "max_amount": 2119.0,
+   "last_family_named_days": 2076.0,
+   "stream_activity_ratio60": 1980.0,
+   "w_service": 1888.0
+  }
+ },
+ "streams + raw + stray": {
+  "auc": 0.9367,
+  "top_features": {
+   "w_subscription": 23445.0,
+   "max_n_payments": 10049.0,
+   "stream_last_days": 8304.0,
+   "last_refund_days": 5417.0,
+   "min_amount_cv": 5367.0,
+   "stream_first_days": 5132.0,
+   "max_days_since_first": 4395.0,
+   "n_refund": 2642.0,
+   "w90_plan": 2565.0,
+   "min_refund_rate": 2228.0,
+   "stream_activity_ratio60": 2185.0,
+   "min_days_since_first": 2180.0,
+   "last_family_named_days": 2119.0,
+   "max_amount": 2104.0,
+   "max_amount_cv": 1892.0
+  }
+ },
+ "drift": {
+  "raw": 0.9999,
+  "streams": 0.7279,
+  "stray": 0.9079
+ }
+}

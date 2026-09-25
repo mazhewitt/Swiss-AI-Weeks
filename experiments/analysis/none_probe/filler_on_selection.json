@@ -1,0 +1,50 @@
+{
+ "base": {
+  "train+selection cv, scored on selection": {
+   "argmax_macro_f1": 0.5849,
+   "tuned_macro_f1": 0.6165,
+   "nested_tuned_macro_f1": 0.5796
+  },
+  "selection-only cv": {
+   "argmax_macro_f1": 0.5653,
+   "tuned_macro_f1": 0.6015,
+   "nested_tuned_macro_f1": 0.5615
+  }
+ },
+ "R": {
+  "train+selection cv, scored on selection": {
+   "argmax_macro_f1": 0.5949,
+   "tuned_macro_f1": 0.62,
+   "nested_tuned_macro_f1": 0.5854
+  },
+  "selection-only cv": {
+   "argmax_macro_f1": 0.5633,
+   "tuned_macro_f1": 0.5994,
+   "nested_tuned_macro_f1": 0.5718
+  }
+ },
+ "RA": {
+  "train+selection cv, scored on selection": {
+   "argmax_macro_f1": 0.5957,
+   "tuned_macro_f1": 0.6184,
+   "nested_tuned_macro_f1": 0.5824
+  },
+  "selection-only cv": {
+   "argmax_macro_f1": 0.574,
+   "tuned_macro_f1": 0.6003,
+   "nested_tuned_macro_f1": 0.5772
+  }
+ },
+ "RAC": {
+  "train+selection cv, scored on selection": {
+   "argmax_macro_f1": 0.5951,
+   "tuned_macro_f1": 0.6199,
+   "nested_tuned_macro_f1": 0.5909
+  },
+  "selection-only cv": {
+   "argmax_macro_f1": 0.5693,
+   "tuned_macro_f1": 0.6008,
+   "nested_tuned_macro_f1": 0.5849
+  }
+ }
+}

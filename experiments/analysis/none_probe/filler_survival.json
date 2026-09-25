@@ -1,0 +1,29 @@
+{
+ "base": {
+  "argmax_macro_f1": 0.6346,
+  "tuned_macro_f1": 0.653,
+  "nested_tuned_macro_f1": 0.6387,
+  "s_auc": 0.8716
+ },
+ "R": {
+  "argmax_macro_f1": 0.6347,
+  "tuned_macro_f1": 0.6481,
+  "nested_tuned_macro_f1": 0.6275,
+  "s_auc": 0.8687,
+  "drift_auc_train_vs_test": 0.7526
+ },
+ "RA": {
+  "argmax_macro_f1": 0.6344,
+  "tuned_macro_f1": 0.6546,
+  "nested_tuned_macro_f1": 0.6365,
+  "s_auc": 0.8731,
+  "drift_auc_train_vs_test": 0.8507
+ },
+ "RAC": {
+  "argmax_macro_f1": 0.6398,
+  "tuned_macro_f1": 0.6575,
+  "nested_tuned_macro_f1": 0.6409,
+  "s_auc": 0.8746,
+  "drift_auc_train_vs_test": 0.9981
+ }
+}
