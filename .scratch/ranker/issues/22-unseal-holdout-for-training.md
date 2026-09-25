@@ -59,3 +59,26 @@ The pre-registered rule failed on one sanity bound: the file predicts 265 test `
 - the families shrink evenly.
 
 The user chose to override the bound, so **`submissions/day2_final_unsealed.csv` is the 17:30 upload**, provided the leakage critic finds nothing blocking. This is recorded as an override of our own pre-registered rule. The file is unvalidated beyond ticket 21's rehearsal of the method.
+
+## Review
+
+One critic (leakage and regression). **None blocking.**
+- **The guard mode:**
+  - only `training_run(with_selection=True, with_holdout=True)` opens the holdout, and only for training;
+  - `with_holdout` alone raises;
+  - the permission ends with its block;
+  - scoring and checkpoint are unchanged;
+  - 56 guard tests pass.
+- **The `unsealed` domain:**
+  - the out-of-fold files have 3,000 unique ids and no duplicates;
+  - `GroupedRanker` keeps copies in their original's fold;
+  - test Clients contribute transactions only;
+  - no holdout label scores anything.
+- **Regression:** the h0, h1 and final paths are unchanged, ticket 21's outputs are untouched, and both files pass `rf submit --check`.
+- **Diagnosis of the +48 `none`:** it comes from the **decision layer**, not the models.
+  - Mean test P(none) barely moves: 0.324 → 0.328.
+  - E3 refitted with the 300 extra labels favours `none` by about 2–3 grid steps.
+  - Crossing each fit's weights with the other's probabilities: the weights account for about +41 to +44 `none`, the models for +4 to +7.
+- **Open (non-blocking):**
+  - no test for `pseudo_labelling()` nested inside the unsealed mode (safe: that check runs first);
+  - `unsealed-checked` relies on the script's `set -e` for the submit check.
