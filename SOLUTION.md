@@ -74,7 +74,8 @@ flowchart TB
 | Survival Race | – | 0.594 |
 | Survival Race, soft race order (`submissions/day2_final_survival_soft.csv`) | – | – |
 | Hail mary: v2 + Survival Race average, self-trained (ticket 14, hail mary) | – | – |
-| Hail mary A, valid Clients weighted 3× (ticket 21, `submissions/day2_final_target_weight.csv`) | – | (17:30 upload) |
+| Hail mary A, valid Clients weighted 3× (ticket 21, `submissions/day2_final_target_weight.csv`) | – | – |
+| As ticket 21, fitted on train plus **all 1,000** valid Clients, the holdout unsealed (ticket 22, `submissions/day2_final_unsealed.csv`) | – (holdout used for training) | (17:30 upload) |
 
 v2 held up on test, and the drift we feared did not cost it. The Survival Race scored 0.594 on test: 0.012 below v2. That reverses its +0.003 on selection, and both gaps are inside the noise of 700 and 1,000 Clients. The two candidates disagree on 16% of test Clients. Only the best upload counts, so both were uploaded.
 
@@ -110,6 +111,8 @@ Test runs about 0.035 below train, so 0.68 on test needs an extra `none` signal 
 | Sociological churn mechanisms (ticket 20): income trend, spend contraction, essential share of spending, price rises, discretionary share of streams, recent stops ("subscription audits") | closed: on top of the hail mary's P(none) they add −0.002 `none` AUC on train and **−0.021** on selection (significantly worse). Only recent stops points the predicted way on both samples, and it shifts between train and test; growing spend, not shrinking, goes with `none` |
 
 **The one lever that moved:** weighting the valid-like Clients 3× in the refit (ticket 21), which follows Santander's second-place lesson of training on the data that matches the target. On the selection set, cross-fitted over two halves, it scored 0.605 against 0.597 at weight 1 (+0.008, 95% −0.005 .. +0.023). That is a tie under the claims rule, but it passed the upload rule, so it became the 17:30 upload. Its gains are on cloud, software, insurance and `none`.
+
+**The last upload (ticket 22).** For the final file we unsealed the 300-Client holdout and trained on all 1,000 labelled valid Clients, with ticket 21's method unchanged. With no held-out valid data left, this file cannot be scored. Its pre-registered sanity rule failed on one bound: 265 test `none` against at most 257, ticket 21's 217 plus 40. That bound guarded against a broken fit, and 265 (26.5%) is closer to the true `none` share on valid (29.3%). The other checks held: it agrees with ticket 21's file on 93.4% of test Clients. The user overrode the bound, and we record it as an override of our own rule.
 
 **3. Conclusion.** Every honest route lands at 0.59–0.60 on selection. The one new signal is real but small against what the models already know. By the arithmetic above, 0.68 needs a near-perfect `none` signal, and none exists in behavioural features on this data. Whatever the other team does, it is outside what we allowed ourselves.
 

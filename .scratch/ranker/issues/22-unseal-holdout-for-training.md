@@ -50,3 +50,12 @@ Label mix of the unsealed file: none 265, cloud 122, mobile 122, gym 108, insura
 Nothing was scored: no holdout label was read outside `data.training_run(with_selection=True, with_holdout=True)`. Numbers in `experiments/analysis/target_weight/unsealed/results.json`.
 
 **Implementation.** `data.training_run(with_selection=True, with_holdout=True)` is the new guard mode (holdout and full valid labels readable in training; `with_holdout` without `with_selection` is a `ValueError`); the existing modes are unchanged and their refusals are re-tested in `tests/test_honest_evaluation.py`. `target_weight.py` gains the `unsealed` domain (train plus all 1,000 valid Clients; the valid Clients are the weighted ones), the `oof unsealed` and `fit unsealed 3` stages, and the `unsealed` and `unsealed-checked` stages that write the file and apply this rule. E3 is fitted on the average of the weight-1 5-fold out-of-fold probabilities of the 3,000 Clients. `scripts/day2_final_unsealed.sh` clears stale outputs, runs the four fits in parallel, waits on each pid, writes the file, runs `rf submit --check` and records the verdict. A second full run of the script (16:02 to 16:04 CEST) rewrote the file byte for byte (`cmp` identical, and the four probability files too); `results.json` differs only in its two timestamps. `uv run pytest -q`: 547 passed.
+
+## Decision: the user overrode the sanity rule (16:10 CEST)
+
+The pre-registered rule failed on one sanity bound: the file predicts 265 test `none` against a bound of 177–257. The bound was a guard against a broken fit, since this file cannot be scored, and 265 (26.5%) is closer to the true `none` share on selection (29.3%) than ticket 21's 217. The other checks all held:
+- it agrees with ticket 21's file on 93.4% of test Clients;
+- it disagrees with v2 on 11.6%;
+- the families shrink evenly.
+
+The user chose to override the bound, so **`submissions/day2_final_unsealed.csv` is the 17:30 upload**, provided the leakage critic finds nothing blocking. This is recorded as an override of our own pre-registered rule. The file is unvalidated beyond ticket 21's rehearsal of the method.
