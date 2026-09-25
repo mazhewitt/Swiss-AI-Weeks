@@ -182,3 +182,12 @@ Train 5-fold out-of-fold, folds of `rf cv`, `macro_f1s` as in the prototype (`ex
 - **`scripts/day2_final_survival.sh`** pins `--race-order unprojected-last`, so it reproduces the committed `submissions/day2_final_survival.csv` (V0). It has not been re-run here.
 - **The test-validity critic's three tests** are merged into `tests/test_survival.py`: the rolled monthly slot, predict and fit racing by the model's order, and `next_rank` as the place in the race.
 
+
+## Selection run for the monthly-slot order (fix rounds 2–3; merged c1473d7)
+
+The rule was fixed before the run: the monthly-slot order replaces the committed candidate only if it scores at least 0.5903 on selection.
+
+- **Result:** run `20260925T085645-c70788` (`survival+monthly-slot+tuned`) scores **0.5862** against 0.5903 for `20260925T080905-fd1dc5` (unprojected-last). Delta −0.0041 (95% −0.0281 .. +0.0188), a tie.
+- **By the rule, the candidate stays** `submissions/day2_final_survival.csv` (unprojected-last). `scripts/day2_final_survival.sh` pins `--race-order unprojected-last` and rebuilds the committed file byte for byte.
+- **The code default stays monthly-slot** (`DEFAULT_ORDER`). It is the better order on train, and the two orders tie on both train and selection. The default affects no committed file.
+- **Critics of fix round 2** (all three) found nothing blocking. Their follow-ups were done in fix round 3: `--race-order`, the order in the log and meta, V0 pinned in the final script, 3 tests killing 4 surviving mutants, and the train tie stated. Fast suite: 507 passed.
