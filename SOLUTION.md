@@ -32,6 +32,7 @@ Our entry for the 2026 challenge (`hackathons/2026/challenge.md`). Glossary: `CO
 | `225229-cc7243` | + Client-level `none` model | 0.576 | tie |
 | `001614-c904bc` | ranker + Pseudo-Labels, Stray Payments join streams (ticket 11) | 0.577 | tie |
 | `001755-e309a3` | ranker + `none` model + Pseudo-Labels, Stray Payments join streams (ticket 11) | 0.587 | tie |
+| `014822-cd37c4` | as above, and Decoy-described payments also join (ticket 12, off by default) | 0.588 | tie |
 
 ## What we learned
 
@@ -39,6 +40,8 @@ Our entry for the 2026 challenge (`hackathons/2026/challenge.md`). Glossary: `CO
 - **`none` is the main lever.** Setting every live-stream truth-`none` Client to `none` would lift train macro-F1 from 0.58 to 0.69. Classic churn signals (an overdue stream, a missed or late last payment, a final refund) are near chance. A Client-level model on per-Client stream aggregates lifts the `none` AUC from 0.69 to 0.88 (`experiments/analysis/churn/`).
 - **Pseudo-Labels can't teach `none`.** Inside the history only 3–5% of live streams stop within 90 days, but at the real Cutoff 23% of live-stream Clients are `none`. A Pseudo-Labeller with uniform churn passes the fidelity check, but it is label noise, not signal (ticket 08).
 - **Train gains shrink on valid and test because the stream features drift.** Filler Descriptions are far more common in valid and test, and they break streams apart. `max_missed_rate` averages 0.07 in train, 0.13 in valid and 0.17 in test. The `none` model's +0.040 on train became +0.003 on selection. Most missing payments are Filler Descriptions booked on another family's home MCC, and in train they mark `none` Clients (92.5% of train Clients with such a payment on a stream's schedule are `none`). So the `none` model learned an artefact of train. Ticket 11 lets these Stray Payments join a stream on its schedule. That cuts the train-vs-test classifier AUC on the `none` model's features from 0.81 to 0.73, and `max_missed_rate` in test from 0.167 to 0.089. The ranker with the `none` model then scores 0.587 on selection, the best so far (+0.011 over the old detector: a tie).
+- **Decoy-described stream payments stay out.** Valid and test also carry some stream payments with a Decoy description: 8.6 per 100 valid streams fill a gap on the schedule, against a control of 0.9. Letting them join (ticket 12) narrows the shift a little more, but it only ties on selection (+0.001) and costs 0.008 on train. In test about 1 in 5 of those joins would be a real Decoy Transaction. So `join_decoys` exists but is off by default (ADR 0001).
+- **Settled on train and left alone:** averaging over seeds adds nothing. A larger ranker (31 leaves, 600 trees) gains on train alone but not once the `none` model is in. The tuned decision layer is worth about +0.014 when fitted and scored on different folds, half its apparent in-sample gain.
 
 ## Setup
 
