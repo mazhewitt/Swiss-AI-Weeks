@@ -129,7 +129,7 @@ class StreamParams:
     schedule_tolerance_days: float = 3.0  # a stray payment joins a stream within this many days of an empty slot
     stray_min_period_days: float = 7.0  # only a stream whose period is at least this many days takes stray payments
     join_strays: bool = True  # False: stray payments join no stream (the detector before ticket 11)
-    join_decoys: bool = True  # a Decoy-described payment joins like a stray one (with join_strays); False: ticket 11
+    join_decoys: bool = False  # True: a Decoy-described payment joins like a stray one (needs join_strays; ticket 12)
 
 
 # --- per-row evidence ---------------------------------------------------------

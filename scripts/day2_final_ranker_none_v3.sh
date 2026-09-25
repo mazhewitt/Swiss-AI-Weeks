@@ -6,10 +6,14 @@
 # On the selection set run 20260925T014822-cd37c4 (ranker+none+pseudo+tuned, ticket-12 detector) scores 0.5884
 # against 0.5871 for 20260925T001755-e309a3 (the same model on the ticket-11 detector): delta +0.0012
 # (95% -0.0187 .. +0.0205), a tie. This refits on train plus the selection set. Whether to upload it is a human
-# decision. Never reads the sealed holdout. The v1 and v2 scripts and files are left as they were; they now
-# produce different files too, as the detector changed. Each stays reproducible at the commit it was made from.
+# decision. Never reads the sealed holdout. The v1 and v2 scripts and files are left as they were.
 #
-# Run from the repo root, after `uv run rf fetch-data` and `uv run rf split`:
+# Reproducible at commit 73ec6a5 only, where `join_decoys` defaulted on. Afterwards the default went back to off
+# (the ticket-11 detector; see ADR 0001 and ticket 12), and the ranker commands take no stream parameters, so at
+# later commits this script runs v2's commands on v2's detector (not checked byte for byte) and does not
+# reproduce submissions/day2_final_ranker_none_v3.csv.
+#
+# Run from the repo root at commit 73ec6a5, after `uv run rf fetch-data` and `uv run rf split`:
 #     bash scripts/day2_final_ranker_none_v3.sh
 set -euo pipefail
 

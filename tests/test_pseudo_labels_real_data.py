@@ -25,14 +25,11 @@ REAL_RAW = REPO / "data" / "raw"
 # streams the rule and the labeller see, so the figures moved (the choice did not): the real rule
 # macro-F1 0.5331 -> 0.5245, the chosen setting's none share 0.3035 -> 0.3005 and its rule macro-F1
 # 0.5433 -> 0.5402 (fidelity runs 20260924T214629-add1e5 before, 20260925T011208-e56725 after).
-# Ticket 12 let Decoy-described payments join a stream on its schedule (`join_decoys`), which moved them
-# again (the choice did not): real rule macro-F1 0.5245 -> 0.5236, none share 0.3005 -> 0.3000, rule
-# macro-F1 0.5402 -> 0.5380.
 CHOSEN = "min_payments 3, min_payments_before 0, churn 0.2"
 REAL_NONE_SHARE = 0.2985
-REAL_RULE_MACRO_F1 = 0.5236
-PSEUDO_NONE_SHARE = 0.3000
-PSEUDO_RULE_MACRO_F1 = 0.5380
+REAL_RULE_MACRO_F1 = 0.5245
+PSEUDO_NONE_SHARE = 0.3005
+PSEUDO_RULE_MACRO_F1 = 0.5402
 
 
 @pytest.mark.slow
