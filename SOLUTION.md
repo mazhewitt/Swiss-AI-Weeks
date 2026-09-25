@@ -62,6 +62,7 @@ flowchart TB
 | `014822-cd37c4` | as above, and Decoy-described payments also join (ticket 12, off by default) | 0.588 | tie |
 | `080905-fd1dc5` | **Survival Race** (ticket 13, ADR 0002) | **0.590** | tie |
 | `085645-c70788` | Survival Race, monthly-slot order for single-payment streams | 0.586 | tie |
+| (ticket 14) | **Hail mary:** the average of v2 and the Survival Race, with survival-only self-training on the target Clients (best of 6 pre-registered configurations, optimistic) | **0.598** | tie |
 
 **Beyond the selection set** (v2 = `001755-e309a3` refit on train plus the selection set):
 
@@ -69,12 +70,14 @@ flowchart TB
 |---|---|---|
 | v2: ranker + `none` model + Pseudo-Labels | 0.596 | **0.606** |
 | Survival Race | – | 0.594 |
+| Hail mary: v2 + Survival Race average, self-trained (ticket 14) | – | (17:30 upload) |
 
 v2 held up on test, and the drift we feared did not cost it. The Survival Race scored 0.594 on test: 0.012 below v2. That reverses its +0.003 on selection, and both gaps are inside the noise of 700 and 1,000 Clients. The two candidates disagree on 16% of test Clients. Only the best upload counts, so both were uploaded.
 
 ## What we learned
 
 - **Choosing among live streams is not timing jitter: streams stop.** Ticket 06 found the soonest projected payment right only 60% of the time among several live streams. On the selection set this is v2's largest loss (111 Clients, worth +0.19 if fixed), and the true stream is projected a median of 7 days later: too far for jitter. The train labels fit each Active Stream independently surviving the Cutoff (about 50%), with the label the soonest survivor. With 3 active families that predicts none / 1st / 2nd = 0.125 / 0.50 / 0.25 against 0.128 / 0.48 / 0.22 observed. Survival is predictable (AUC 0.86), which gave us the Survival Race (ADR 0002). It was +0.016 over v2 on train but only +0.003 on selection (a tie). Its biggest gains are on mobile (0.52 → 0.70) and insurance (0.55 → 0.61).
+- **Averaging two different models beat both transductive tricks.** Averaging v2's and the Survival Race's probabilities scored 0.598 on selection, +0.011 over v2 (a tie). On top of it, label-shift EM added +0.001, and self-training on the target Clients' own confident predictions added between −0.007 and −0.000 (ticket 14). So the train→valid shift is not mainly a shift in the label mix, and a model's own confident labels on the target taught it nothing new.
 - **`none` is the main lever.** Setting every live-stream truth-`none` Client to `none` would lift train macro-F1 from 0.58 to 0.69. Classic churn signals (an overdue stream, a missed or late last payment, a final refund) are near chance. A Client-level model on per-Client stream aggregates lifts the `none` AUC from 0.69 to 0.88 (`experiments/analysis/churn/`).
 - **Pseudo-Labels can't teach `none`.** Inside the history only 3–5% of live streams stop within 90 days, but at the real Cutoff 23% of live-stream Clients are `none`. A Pseudo-Labeller with uniform churn passes the fidelity check, but it is label noise, not signal (ticket 08).
 - **Train gains shrink on valid and test because the stream features drift.** Filler Descriptions are far more common in valid and test, and they break streams apart. `max_missed_rate` averages 0.07 in train, 0.13 in valid and 0.17 in test. The `none` model's +0.040 on train became +0.003 on selection. Most missing payments are Filler Descriptions booked on another family's home MCC, and in train they mark `none` Clients (92.5% of train Clients with such a payment on a stream's schedule are `none`). So the `none` model learned an artefact of train. Ticket 11 lets these Stray Payments join a stream on its schedule. That cuts the train-vs-test classifier AUC on the `none` model's features from 0.81 to 0.73, and `max_missed_rate` in test from 0.167 to 0.089. The ranker with the `none` model then scores 0.587 on selection, the best so far (+0.011 over the old detector: a tie).
