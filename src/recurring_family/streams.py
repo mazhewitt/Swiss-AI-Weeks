@@ -13,10 +13,12 @@ Merchant Family evidence from its description and MCC:
 A payment whose description names no family and that none of the above placed (a Filler Description
 on another family's home MCC or on no home MCC, or an ambiguous description no family of it fits) is
 a *stray*: it joins a stream whose amount it fits when its date also fits an empty slot of that
-stream's schedule, and never starts one. Valid and test book many stream payments this way.
+stream's schedule, and never starts one. Valid and test book many stream payments this way. With
+`StreamParams.join_decoys`, a payment with a Decoy description joins under the same rules, after the
+strays: valid and test also book some stream payments that way.
 
 Shop descriptions, service fees and Decoy Transactions ("digital order", "merchant charge",
-...) are dropped. Music and streaming share MCC 5812: a description hint ("audio", "video", ...)
+...) are otherwise dropped. Music and streaming share MCC 5812: a description hint ("audio", "video", ...)
 puts a payment in its family before amount clustering, so two streams at nearby amounts never
 chain into one. Unhinted payments ("premium plan") join the hinted stream whose amount they fit;
 the rest form streams that are split into music or streaming by amount.
@@ -127,6 +129,7 @@ class StreamParams:
     schedule_tolerance_days: float = 3.0  # a stray payment joins a stream within this many days of an empty slot
     stray_min_period_days: float = 7.0  # only a stream whose period is at least this many days takes stray payments
     join_strays: bool = True  # False: stray payments join no stream (the detector before ticket 11)
+    join_decoys: bool = True  # a Decoy-described payment joins like a stray one (with join_strays); False: ticket 11
 
 
 # --- per-row evidence ---------------------------------------------------------
@@ -168,6 +171,12 @@ def _evidence(description: str, mcc: str) -> tuple[str, frozenset[str], str | No
 def _names_family(description: str) -> bool:
     words = set(_words(description))
     return any(words & keys for keys in _FAMILY_WORDS.values())
+
+
+def _decoy_described(description: str) -> bool:
+    """A Decoy description ("digital order", "merchant charge", ...), never a shop payment or fee."""
+    words = set(_words(description))
+    return bool(words & _DECOY_WORDS) and not words & _SHOP_WORDS
 
 
 def _group_choices(families, hint) -> list[set[str]]:
@@ -382,10 +391,20 @@ def _client_streams(client, payments, refunds, cutoff, params):
         for i in np.flatnonzero(stream_of < 0)
         if kind[i] in ("stray", "ambiguous") or (kind[i] == "filler" and not _names_family(description[i]))
     ]
+    # With `join_decoys`, a payment with a Decoy description (never a shop payment or fee) then joins
+    # under the same rules, after the strays have taken their slots: valid and test book some stream
+    # payments that way. A random Decoy Transaction joins only when it lands on an empty slot at the
+    # stream's amount.
+    decoys = []
+    if params.join_decoys:
+        decoys = [i for i in np.flatnonzero(stream_of < 0) if _decoy_described(description[i])]
+    in_order = lambda i: (ns[i], log_amount[i], str(description[i]), str(mcc[i]))  # never row order
+    ranges = [None if g is None else (lo, hi) for g, lo, hi in streams]
+    days = ns / pd.Timedelta(days=1).value
     if stray and params.join_strays:
-        stray.sort(key=lambda i: (ns[i], log_amount[i], str(description[i]), str(mcc[i])))  # never row order
-        ranges = [None if g is None else (lo, hi) for g, lo, hi in streams]
-        _join_on_schedule(stray, stream_of, ranges, ns / pd.Timedelta(days=1).value, log_amount, params)
+        _join_on_schedule(sorted(stray, key=in_order), stream_of, ranges, days, log_amount, params)
+    if decoys and params.join_strays:
+        _join_on_schedule(sorted(stray + decoys, key=in_order), stream_of, ranges, days, log_amount, params)
 
     refund_counts, reversed_ = _match_refunds(refunds, stream_of, [g for g, _, _ in streams], ns, log_amount, params)
 
