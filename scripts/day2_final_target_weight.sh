@@ -19,11 +19,15 @@ for m in v2 surv; do
     [ -f "artifacts/hailmary/final/target_$m.csv" ] || uv run python "$H" fit final "$m"
 done
 [ -f artifacts/target_weight/halves.csv ] || uv run python "$T" halves
-uv run python "$T" fit final 3 v2 &
-uv run python "$T" fit final 3 surv &
-uv run python "$T" fit final 1 v2 &
-uv run python "$T" fit final 1 surv &
-wait
+rm -f artifacts/target_weight/final/target_*_w*.csv  # no stale output can stand in for a failed fit
+PIDS=()
+for w in 3 1; do
+    for m in v2 surv; do
+        uv run python "$T" fit final "$w" "$m" &
+        PIDS+=($!)
+    done
+done
+for pid in "${PIDS[@]}"; do wait "$pid"; done  # each fit's own exit status, so set -e sees a failure
 for h in h0 h1; do
     for m in v2 surv; do
         [ -f "artifacts/target_weight/$h/oof_$m.csv" ] || uv run python "$T" oof "$h" "$m"
