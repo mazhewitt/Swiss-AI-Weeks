@@ -133,3 +133,13 @@ def test_models_take_the_option_and_default_to_the_default_detector():
     assert not p_robust.equals(p_plain)
     survival = SurvivalModel(order="unprojected-last", stream_params=ROBUST).fit(tx_, labels)
     assert survival.predict_proba(tx_, labels.index).shape == (len(labels), 8)
+
+
+def test_a_saved_model_keeps_its_detector_setting(tmp_path):
+    tx_, labels = _clients()
+    for model, cls in ((RankerModel(stream_params=ROBUST), RankerModel), (SurvivalModel(stream_params=ROBUST), SurvivalModel)):
+        model.fit(tx_, labels).save(tmp_path / "m.json")
+        assert cls.load(tmp_path / "m.json").stream_params == ROBUST
+    RankerModel().fit(tx_, labels).save(tmp_path / "d.json")
+    assert "stream_params" not in (tmp_path / "d.json").read_text()
+    assert RankerModel.load(tmp_path / "d.json").stream_params is None

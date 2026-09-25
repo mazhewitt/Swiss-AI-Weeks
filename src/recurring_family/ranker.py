@@ -295,6 +295,16 @@ class RankerModel:
         """What the experiment log adds to the model name."""
         return "" if self.none_model is None else "+none"
 
+    def _streams(self, transactions: pd.DataFrame, clients: pd.Index) -> pd.DataFrame:
+        if self.stream_params is None:
+            return _streams_of(transactions, clients)
+        return _streams_of(transactions, clients, self.stream_params)
+
+    def _detected(self, transactions: pd.DataFrame, clients: pd.Index) -> tuple[pd.DataFrame, pd.DataFrame]:
+        if self.stream_params is None:
+            return _detected(transactions, clients)
+        return _detected(transactions, clients, self.stream_params)
+
     def fit(self, transactions: pd.DataFrame, labels: pd.Series) -> "RankerModel":
         unknown = set(labels) - set(LABELS)
         if unknown:
@@ -307,7 +317,7 @@ class RankerModel:
         return self
 
     def _fit_ranker(self, transactions: pd.DataFrame, labels: pd.Series) -> None:
-        rows = candidates(_streams_of(transactions, labels.index, self.stream_params))
+        rows = candidates(self._streams(transactions, labels.index))
         x, target, weight = rows[FEATURE_COLUMNS], _targets(rows, labels), None
         if self.pseudo is not None and len(self.pseudo):
             x = pd.concat([x, self.pseudo[FEATURE_COLUMNS]], ignore_index=True)
@@ -325,7 +335,7 @@ class RankerModel:
         """The rows the `none` model trains on: one per labelled Client with at least one Candidate
         Stream. `RANKER_NONE` is cross-fitted: each Client's comes from rankers fitted on the other
         folds (with every Pseudo-Labelled row), so no Client's own label reaches its row."""
-        streams, payments = _detected(transactions, labels.index, self.stream_params)
+        streams, payments = self._detected(transactions, labels.index)
         x = client_features(streams, payments)
         if RANKER_NONE in self.none_model.features:
             x.insert(0, RANKER_NONE, self._cross_fitted_none(transactions, labels).reindex(x.index))
@@ -348,7 +358,7 @@ class RankerModel:
     def predict_proba(self, transactions: pd.DataFrame, clients: pd.Index) -> pd.DataFrame:
         if self.booster is None and self.constant is None:
             raise RuntimeError("RankerModel is not fitted")
-        rows = candidates(_streams_of(transactions, clients, self.stream_params))
+        rows = candidates(self._streams(transactions, clients))
         if self.booster is None:
             score = np.full(len(rows), self.constant, dtype=float)
         else:
@@ -359,7 +369,7 @@ class RankerModel:
             return proba
         # the `none` model scores every requested Client with a Candidate Stream
         ids = proba.index.astype(str)
-        x = client_features(*_detected(transactions, clients, self.stream_params))
+        x = client_features(*self._detected(transactions, clients))
         if RANKER_NONE in self.none_model.features:
             x.insert(0, RANKER_NONE, pd.Series(proba[NONE_LABEL].to_numpy(), index=ids).reindex(x.index))
         p_none = self.none_model.predict(x).reindex(ids)

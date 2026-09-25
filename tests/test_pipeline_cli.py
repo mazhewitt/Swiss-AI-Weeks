@@ -297,6 +297,7 @@ CHANGED_PARAMS = {
     "stray_min_period_days": "20",
     "join_strays": "false",
     "join_decoys": "true",
+    "robust": "true",
 }
 
 

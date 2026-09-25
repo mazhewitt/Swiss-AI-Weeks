@@ -315,7 +315,7 @@ class SurvivalModel:
         unknown = set(labels) - set(LABELS)
         if unknown:
             raise ValueError(f"labels outside the allowed set: {sorted(unknown)}")
-        table = race_table(_streams_of(transactions, labels.index, self.stream_params), order=self.order)
+        table = race_table(self._streams(transactions, labels.index), order=self.order)
         present = set(transactions["client_id"].astype(str))
         keep, target, weight, self.n_unexplained = self._training_rows(table, labels, present)
         x, y = table.loc[keep, FEATURE_COLUMNS], target[keep]
@@ -332,6 +332,11 @@ class SurvivalModel:
             model.fit(x, y)
         self.booster = model.booster_
         return self
+
+    def _streams(self, transactions: pd.DataFrame, clients: pd.Index) -> pd.DataFrame:
+        if self.stream_params is None:
+            return _streams_of(transactions, clients)
+        return _streams_of(transactions, clients, self.stream_params)
 
     def _training_rows(
         self, table: pd.DataFrame, labels: pd.Series, present: set[str]
@@ -369,7 +374,7 @@ class SurvivalModel:
         return np.asarray(self.booster.predict(table[FEATURE_COLUMNS]), dtype=float)
 
     def predict_proba(self, transactions: pd.DataFrame, clients: pd.Index) -> pd.DataFrame:
-        table = race_table(_streams_of(transactions, clients, self.stream_params), order=self.order)
+        table = race_table(self._streams(transactions, clients), order=self.order)
         if self.soft:
             return soft_race_proba(table, self.survival(table), race_slot(table, self.order), jitter_scale(table), clients)
         return race_proba(table, self.survival(table), clients)
