@@ -211,6 +211,32 @@ def test_a_submission_model_never_reads_valid_labels_while_predicting(fetched, m
     assert not (fetched.root / "submissions" / "cheat.csv").exists()
 
 
+@pytest.mark.parametrize("source", ["selection", "holdout", "valid"])
+def test_submit_predicts_under_the_predicting_guard(fetched, monkeypatch, capsys, source):
+    # submit's prediction runs inside `data.predicting()`: the refusal is the predicting stage's LabelLeak
+    big_valid(fetched)
+    monkeypatch.setattr(LabelCheater, "raw", fetched.raw, raising=False)
+    monkeypatch.setattr(LabelCheater, "source", source, raising=False)
+    monkeypatch.setitem(models.MODELS, "cheater", LabelCheater)
+    raised = []
+    guard = data._guard_label_read
+
+    def recording(split):
+        try:
+            guard(split)
+        except data.LabelLeak as leak:
+            raised.append(str(leak))
+            raise
+
+    monkeypatch.setattr(data, "_guard_label_read", recording)
+    assert fetched.run("train", "--model", "cheater") == 0
+    capsys.readouterr()
+    assert fetched.run("submit", "--model", "cheater", "--name", "cheat") != 0
+    assert len(raised) == 1 and "while a model predicts" in raised[0]
+    assert "while a model predicts" in capsys.readouterr().err
+    assert not (fetched.root / "submissions" / "cheat.csv").exists()
+
+
 @pytest.mark.parametrize("split", ["holdout", "valid"])
 def test_evaluate_refuses_holdout_or_all_of_valid_without_checkpoint(fetched, split):
     assert fetched.run("train", "--model", "prior") == 0

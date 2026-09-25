@@ -147,3 +147,29 @@ Run `20260925T080905-fd1dc5` (`survival+tuned`) scores **0.5903** on the selecti
   - `n_unexplained` counts labels of Clients with no transactions passed in;
   - `cmd_submit` doesn't wrap prediction in `data.predicting()` (every model; harmless);
   - `scripts/day2_noon_ranker_pseudo.sh` no longer reproduces its committed file since ticket 11 (header note added).
+
+## Fix round 2 (review follow-ups)
+
+**Race order among unprojected (single-payment) streams.** Until now they raced last, and ties among them fell back to stream-table order (alphabetical by family). `next_rank` carried the same arbitrary order. The ranker's `candidates()` is unchanged. Inside the survival model, `survival.ORDERS` names the three pre-registered variants and no others. Under V1 and V2, `next_rank` is recomputed as the stream's place in the race.
+
+- **V0 `unprojected-last`:** the previous behaviour.
+- **V1 `recent-first`:** within the unprojected block, the most recent payment goes first, then more payments, then stream-table order.
+- **V2 `monthly-slot`:** an unprojected stream races at its last payment + 30.4 days, rolled forward past the Cutoff as `streams._summarise` rolls a projection. The slot is used for ordering only; the `days_to_next` feature stays missing.
+
+Train 5-fold out-of-fold, folds of `rf cv`, `macro_f1s` as in the prototype (`experiments/analysis/survival/order_variants.py`, results in `order_variants.json`):
+
+| Variant | argmax | tuned | nested tuned | argmax changed vs V0 |
+|---|---|---|---|---|
+| V0 `unprojected-last` | 0.6322 | 0.6418 | 0.6239 | 0 |
+| V1 `recent-first` | 0.6393 | 0.6414 | 0.6215 | 91 |
+| **V2 `monthly-slot` (new default)** | 0.6343 | 0.6503 | **0.6323** | 212 |
+
+- **V2 is the default:** it has the best nested tuned score, +0.0084 over V0.
+- **V0 is still reachable:** `SurvivalModel(order="unprojected-last")`. A model file saved before the order was a setting loads as V0.
+- **The committed candidate is still V0:** `submissions/day2_final_survival.csv` and selection run `20260925T080905-fd1dc5` were made with V0. The selection run and the refit are for the orchestrator to redo.
+- **`rf cv --model survival` with the new default:** argmax 0.6343, tuned 0.6503, nested tuned 0.6239 → 0.6323.
+
+**`n_unexplained`** now counts only labelled Clients whose transactions `fit` was given. A Client with transactions but no Candidate Stream and a family label still counts. The full-train figure is unchanged at 87.
+
+**`rf submit`** now predicts inside `data.predicting()`, for every model. A model that reads any valid label while predicting in submit gets the predicting stage's `LabelLeak`. `day2_final_ranker_none_v2.csv` is still byte-identical.
+

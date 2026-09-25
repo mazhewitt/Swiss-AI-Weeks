@@ -1,0 +1,23 @@
+[
+ {
+  "variant": "V0 unprojected-last",
+  "argmax_macro_f1": 0.6322,
+  "tuned_macro_f1": 0.6418,
+  "nested_tuned_macro_f1": 0.6239,
+  "argmax_changed_vs_V0": 0
+ },
+ {
+  "variant": "V1 recent-first",
+  "argmax_macro_f1": 0.6393,
+  "tuned_macro_f1": 0.6414,
+  "nested_tuned_macro_f1": 0.6215,
+  "argmax_changed_vs_V0": 91
+ },
+ {
+  "variant": "V2 monthly-slot",
+  "argmax_macro_f1": 0.6343,
+  "tuned_macro_f1": 0.6503,
+  "nested_tuned_macro_f1": 0.6323,
+  "argmax_changed_vs_V0": 212
+ }
+]

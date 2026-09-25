@@ -2,9 +2,19 @@
 
 A LightGBM binary model gives every Candidate Stream a survival probability s, from exactly the Stream
 Ranker's features (`ranker.candidates`, so the stream table only: ADR 0001). A Client's streams race in
-projected payment order: `days_to_next` ascending, streams with no projection (one payment) last, ties
-to the stream with more payments, otherwise in stream-table order (so ties among unprojected, single-payment
-streams fall back to stream-table order: a known follow-up). Then
+projected payment order, by one of `ORDERS` (`DEFAULT_ORDER` unless the model is given another):
+
+- `unprojected-last`: `days_to_next` ascending; streams with no projection (one payment) last; ties to the
+  stream with more payments, then stream-table order. The ranker's own order: ties among unprojected
+  streams fall back to stream-table order, which is alphabetical by family.
+- `recent-first`: the same, except that within the unprojected block the most recently paid stream
+  (`days_since_last` ascending) goes first, then more payments, then stream-table order.
+- `monthly-slot`: an unprojected stream races at a slot one month (30.4 days) after its payment, rolled
+  forward past the Cutoff as the detector rolls a projection. The slot orders only: its `days_to_next`
+  feature stays missing. Ties as in `unprojected-last`.
+
+Under the last two, `next_rank` is the stream's place in the race (`order` + 1), so the feature matches
+the race; under `unprojected-last` it already is. Then
 
     P(stream i is next) = s_i * prod_{j before i} (1 - s_j)
     P(`none`)           = prod_j (1 - s_j)
@@ -15,7 +25,8 @@ The fit is a plain binary log-loss over a filtered row set, which is the race's 
 label is a family, its first stream in race order takes target 1 and every stream before it target 0;
 the streams after it are censored (it is not known whether they would have paid) and give no row. A
 `none` Client gives every stream target 0. A Client whose label family has no Candidate Stream is not
-explained by the race and gives no rows; `n_unexplained` counts them.
+explained by the race and gives no rows; `n_unexplained` counts them (among the Clients whose
+transactions the fit was given).
 
 No Pseudo-Labels and no `none` model: a Shifted Cutoff has almost no churn, so it would teach s = 1.
 Streams come from the ranker's detector path, so both models share one stream cache.
@@ -33,24 +44,57 @@ import pandas as pd
 from .config import CUTOFF, LABELS, MERCHANT_FAMILIES, NONE_LABEL
 from .ranker import FEATURE_COLUMNS, LGBM_PARAMS, _streams_of, candidates
 
-def race_order(rows: pd.DataFrame) -> pd.DataFrame:
-    """Candidate rows (`ranker.candidates`) sorted into race order per Client, with `order` 0, 1, ...:
-    `days_to_next` ascending, no projection last, ties by `n_payments` descending, then stable."""
-    keyed = rows.assign(_key=rows["days_to_next"].fillna(np.inf), _n=-rows["n_payments"])
-    out = keyed.sort_values(["client_id", "_key", "_n"], kind="stable").drop(columns=["_key", "_n"])
+ORDERS = ("unprojected-last", "recent-first", "monthly-slot")
+DEFAULT_ORDER = "monthly-slot"
+# what a model saved before the order was a setting raced by
+_SAVED_WITHOUT_ORDER = "unprojected-last"
+
+MONTH_DAYS = 30.4  # the detector's monthly period
+
+
+def _monthly_slot(days_since_last: pd.Series) -> pd.Series:
+    """Days from the Cutoff to one month after the last payment, rolled forward past the Cutoff by whole
+    months (as `streams._summarise` rolls a projection)."""
+    slot = MONTH_DAYS - days_since_last
+    behind = slot < 0
+    return slot.where(~behind, slot + MONTH_DAYS * np.ceil(-slot / MONTH_DAYS))
+
+
+def race_order(rows: pd.DataFrame, order: str = DEFAULT_ORDER) -> pd.DataFrame:
+    """Candidate rows (`ranker.candidates`) sorted into race order per Client by `order` (one of
+    `ORDERS`; see the module docstring), with `order` 0, 1, ... and, unless `unprojected-last`,
+    `next_rank` = `order` + 1."""
+    if order not in ORDERS:
+        raise ValueError(f"unknown race order {order!r}; one of {ORDERS}")
+    unprojected = rows["days_to_next"].isna()
+    key = rows["days_to_next"].fillna(np.inf)
+    since = pd.Series(0.0, index=rows.index)
+    if order == "recent-first":
+        since = rows["days_since_last"].where(unprojected, 0.0)
+    elif order == "monthly-slot":
+        key = key.where(~unprojected, _monthly_slot(rows["days_since_last"]))
+    keyed = rows.assign(_key=key, _since=since, _n=-rows["n_payments"])
+    out = keyed.sort_values(["client_id", "_key", "_since", "_n"], kind="stable").drop(columns=["_key", "_since", "_n"])
     out["order"] = out.groupby("client_id").cumcount()
+    if order != "unprojected-last":
+        out["next_rank"] = (out["order"] + 1).astype(float)
     return out.reset_index(drop=True)
 
 
-def race_table(streams: pd.DataFrame, cutoff: pd.Timestamp = CUTOFF) -> pd.DataFrame:
+def race_table(streams: pd.DataFrame, cutoff: pd.Timestamp = CUTOFF, order: str = DEFAULT_ORDER) -> pd.DataFrame:
     """The Candidate Streams of a stream table, in race order: `client_id`, `FEATURE_COLUMNS`, `order`."""
-    return race_order(candidates(streams, cutoff))
+    return race_order(candidates(streams, cutoff), order)
 
 
-def training_rows(table: pd.DataFrame, labels: pd.Series) -> tuple[np.ndarray, np.ndarray, int]:
+def training_rows(
+    table: pd.DataFrame, labels: pd.Series, present: set[str] | None = None
+) -> tuple[np.ndarray, np.ndarray, int]:
     """Which rows of a race-ordered table (`race_order`) the model trains on, their targets, and how many
-    labelled Clients the race cannot explain (label a family with no Candidate Stream of it)."""
+    labelled Clients the race cannot explain (label a family with no Candidate Stream of it). Given
+    `present`, only those Clients count as unexplained: the ones whose transactions were given."""
     truth = pd.Series(labels.astype(str).to_numpy(), index=labels.index.astype(str))
+    if present is not None:
+        present = set(map(str, present))
     client = table["client_id"].astype(str)
     label = client.map(truth)
     hit = table["family"].astype(str).to_numpy(dtype=object) == label.to_numpy(dtype=object)
@@ -61,7 +105,9 @@ def training_rows(table: pd.DataFrame, labels: pd.Series) -> tuple[np.ndarray, n
     keep = (is_none | stop.notna()) & (is_none | (table["order"] <= stop))
     target = (first_hit & keep).astype(int)
     explained = set(client[first_hit])
-    unexplained = int(sum(1 for c, l in truth.items() if l != NONE_LABEL and c not in explained))
+    unexplained = int(
+        sum(1 for c, l in truth.items() if l != NONE_LABEL and c not in explained and (present is None or c in present))
+    )
     return keep.to_numpy(), target.to_numpy(), unexplained
 
 
@@ -88,7 +134,10 @@ class SurvivalModel:
 
     name = "survival"
 
-    def __init__(self, booster: lgb.Booster | None = None, constant: float | None = None):
+    def __init__(self, booster: lgb.Booster | None = None, constant: float | None = None, order: str = DEFAULT_ORDER):
+        if order not in ORDERS:
+            raise ValueError(f"unknown race order {order!r}; one of {ORDERS}")
+        self.order = order  # how a Client's streams race (`ORDERS`)
         self.booster = booster
         self.constant = constant  # every stream's s when training had one outcome only (or no rows)
         self.n_training_rows: int | None = None
@@ -98,8 +147,9 @@ class SurvivalModel:
         unknown = set(labels) - set(LABELS)
         if unknown:
             raise ValueError(f"labels outside the allowed set: {sorted(unknown)}")
-        table = race_table(_streams_of(transactions, labels.index))
-        keep, target, self.n_unexplained = training_rows(table, labels)
+        table = race_table(_streams_of(transactions, labels.index), order=self.order)
+        present = set(transactions["client_id"].astype(str))
+        keep, target, self.n_unexplained = training_rows(table, labels, present)
         x, y = table.loc[keep, FEATURE_COLUMNS], target[keep]
         self.n_training_rows = int(keep.sum())
         self.booster, self.constant = None, None
@@ -129,7 +179,7 @@ class SurvivalModel:
         return np.asarray(self.booster.predict(table[FEATURE_COLUMNS]), dtype=float)
 
     def predict_proba(self, transactions: pd.DataFrame, clients: pd.Index) -> pd.DataFrame:
-        table = race_table(_streams_of(transactions, clients))
+        table = race_table(_streams_of(transactions, clients), order=self.order)
         return race_proba(table, self.survival(table), clients)
 
     def save(self, path: Path) -> None:
@@ -137,6 +187,7 @@ class SurvivalModel:
             "model": self.name,
             "features": FEATURE_COLUMNS,
             "constant": self.constant,
+            "order": self.order,
             "n_training_rows": self.n_training_rows,
             "n_unexplained": self.n_unexplained,
             "booster": None if self.booster is None else self.booster.model_to_string(),
@@ -149,6 +200,6 @@ class SurvivalModel:
         if saved.get("features") != FEATURE_COLUMNS:
             raise ValueError(f"{path} was saved with other features; retrain it")
         booster = None if saved["booster"] is None else lgb.Booster(model_str=saved["booster"])
-        model = cls(booster, saved["constant"])
+        model = cls(booster, saved["constant"], saved.get("order", _SAVED_WITHOUT_ORDER))
         model.n_training_rows, model.n_unexplained = saved.get("n_training_rows"), saved.get("n_unexplained")
         return model

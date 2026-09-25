@@ -11,7 +11,15 @@ import pytest
 from recurring_family import data, survival
 from recurring_family.ranker import FEATURE_COLUMNS
 from recurring_family.streams import detect_streams
-from recurring_family.survival import SurvivalModel, race_order, race_proba, race_table, training_rows
+from recurring_family.survival import (
+    DEFAULT_ORDER,
+    ORDERS,
+    SurvivalModel,
+    race_order,
+    race_proba,
+    race_table,
+    training_rows,
+)
 from test_lgbm_pipeline import LABELS, SPLIT_FILES, read_rows, shop, write_sample_submission, write_transactions
 from test_ranker import read_proba, separable_project
 from test_ranker_none_model import DAY, train_split, with_decoys
@@ -21,11 +29,15 @@ from test_streams import series as stream_series
 FAMILIES = [label for label in LABELS if label != "none"]
 
 
-def table(*streams):
-    """A race-ordered table from (client_id, family, days_to_next, n_payments) tuples."""
-    rows = pd.DataFrame(streams, columns=["client_id", "family", "days_to_next", "n_payments"])
+def table(*streams, order=DEFAULT_ORDER):
+    """A race-ordered table from (client_id, family, days_to_next, n_payments[, days_since_last]) tuples;
+    `days_since_last` defaults to 0 (paid on the Cutoff)."""
+    rows = pd.DataFrame(
+        [(*stream, 0.0) if len(stream) == 4 else stream for stream in streams],
+        columns=["client_id", "family", "days_to_next", "n_payments", "days_since_last"],
+    )
     rows["stream"] = range(len(rows))  # the hand-made stream's position, to read the order back
-    return race_order(rows)
+    return race_order(rows, order)
 
 
 def rows_of(t, labels):
@@ -42,7 +54,59 @@ def kept_streams(kept, client):
 # --- race order -------------------------------------------------------------------------------
 
 
-def test_streams_race_by_projected_payment_with_no_projection_last_and_ties_to_more_payments():
+def test_the_default_order_gives_an_unprojected_stream_a_monthly_slot():
+    assert DEFAULT_ORDER == "monthly-slot"
+    t = table(
+        ("A", "music", 20.0, 3),  # 0
+        ("A", "gym", np.nan, 1, 20.0),  # 1: one payment 20 days ago -> slot 10.4
+        ("A", "cloud", 5.0, 4),  # 2
+        ("A", "mobile", np.nan, 1, 100.0),  # 3: 100 days ago -> -69.6, rolled 3 months -> 21.6
+        ("A", "software", np.nan, 1, 9.6),  # 4: 9.6 days ago -> 20.8
+        ("A", "insurance", np.nan, 1, 30.4),  # 5: on the Cutoff exactly -> 0, not rolled
+        ("B", "gym", np.nan, 1, 0.0),  # 6
+    )
+    a = t[t["client_id"] == "A"]
+    assert a["stream"].tolist() == [5, 2, 1, 0, 4, 3]
+    assert a["order"].tolist() == [0, 1, 2, 3, 4, 5]
+    # the slot orders only: the feature stays missing, and next_rank is the place in the race
+    assert a.set_index("stream").loc[[5, 1, 4, 3], "days_to_next"].isna().all()
+    assert a["next_rank"].tolist() == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    assert t.loc[t["client_id"] == "B", "order"].tolist() == [0]
+
+
+def test_a_monthly_slot_tie_goes_to_the_projected_stream_with_more_payments_then_stream_table_order():
+    t = table(
+        ("A", "music", np.nan, 1, 20.4),  # 0: slot 10.0
+        ("A", "gym", 10.0, 3),  # 1
+        ("A", "cloud", np.nan, 1, 20.4),  # 2: slot 10.0, after stream 0 in the table
+    )
+    assert t["stream"].tolist() == [1, 0, 2]
+
+
+def test_recent_first_orders_the_unprojected_block_by_its_last_payment():
+    t = table(
+        ("A", "gym", np.nan, 1, 50.0),  # 0
+        ("A", "music", 20.0, 3),  # 1
+        ("A", "cloud", np.nan, 1, 5.0),  # 2
+        ("A", "mobile", np.nan, 2, 50.0),  # 3: ties with 0, more payments
+        ("A", "software", np.nan, 1, 50.0),  # 4: ties with 0 exactly, stays after it
+        order="recent-first",
+    )
+    assert t["stream"].tolist() == [1, 2, 3, 0, 4]
+    assert t["next_rank"].tolist() == [1.0, 2.0, 3.0, 4.0, 5.0]
+
+
+def test_every_order_is_reachable_and_an_unknown_one_is_refused():
+    t = table(("A", "gym", 3.0, 5), ("A", "music", np.nan, 1, 1.0))
+    for order in ORDERS:
+        assert len(race_order(t.drop(columns="order"), order)) == 2
+    with pytest.raises(ValueError):
+        race_order(t, "alphabetical")
+    with pytest.raises(ValueError):
+        SurvivalModel(order="alphabetical")
+
+
+def test_unprojected_last_races_projected_payment_with_no_projection_last_and_ties_to_more_payments():
     t = table(
         ("A", "gym", np.nan, 1),  # 0: one payment, no projection
         ("A", "music", 20.0, 3),  # 1
@@ -50,6 +114,7 @@ def test_streams_race_by_projected_payment_with_no_projection_last_and_ties_to_m
         ("A", "mobile", 20.0, 7),  # 3: ties with 1, more payments
         ("A", "software", 20.0, 3),  # 4: ties with 1 exactly, stays after it
         ("B", "gym", np.nan, 2),  # 5
+        order="unprojected-last",
     )
     assert t.loc[t["client_id"] == "A", "stream"].tolist() == [2, 3, 1, 4, 0]
     assert t.loc[t["client_id"] == "A", "order"].tolist() == [0, 1, 2, 3, 4]
@@ -80,12 +145,20 @@ def test_a_client_whose_label_family_has_no_candidate_stream_gives_no_rows_and_i
     assert unexplained == 2
 
 
-def test_streams_with_no_projection_race_last():
-    t = table(("A", "gym", np.nan, 1), ("A", "music", 40.0, 3))
+def test_under_unprojected_last_streams_with_no_projection_race_last():
+    t = table(("A", "gym", np.nan, 1), ("A", "music", 40.0, 3), order="unprojected-last")
     kept, _ = rows_of(t, {"A": "gym"})
     assert kept_streams(kept, "A") == {1: 0, 0: 1}  # music is ahead and lost; gym won last
     kept, _ = rows_of(t, {"A": "music"})
     assert kept_streams(kept, "A") == {1: 1}  # the unprojected gym stream is censored
+
+
+def test_under_the_default_order_an_unprojected_stream_can_win_ahead_of_a_projected_one():
+    t = table(("A", "gym", np.nan, 1, 25.0), ("A", "music", 9.0, 5), ("A", "cloud", 40.0, 5))  # gym slot 5.4
+    kept, _ = rows_of(t, {"A": "gym"})
+    assert kept_streams(kept, "A") == {0: 1}
+    kept, _ = rows_of(t, {"A": "music"})
+    assert kept_streams(kept, "A") == {0: 0, 1: 1}
 
 
 def test_of_two_streams_of_the_label_family_the_first_in_race_order_takes_the_target():
@@ -309,11 +382,11 @@ def test_the_fit_sees_exactly_the_kept_rows_and_their_targets(monkeypatch, fit_s
          for i, c in enumerate(clients)}
     )
     monkeypatch.setattr(survival, "_streams_of", lambda transactions, clients: None)
-    monkeypatch.setattr(survival, "race_table", lambda streams: t)
+    monkeypatch.setattr(survival, "race_table", lambda streams, order: t)
     keep, target, _ = training_rows(t, labels)
     assert 0 < keep.sum() < len(t) and len(set(target[keep])) == 2
 
-    model = SurvivalModel().fit(pd.DataFrame(), labels)
+    model = SurvivalModel().fit(pd.DataFrame({"client_id": labels.index}), labels)
     [(x, y)] = fit_spy
     pd.testing.assert_frame_equal(x, t.loc[keep, FEATURE_COLUMNS])
     np.testing.assert_array_equal(y, target[keep])
@@ -413,3 +486,36 @@ def test_a_certain_survivor_leaves_the_streams_behind_it_nothing():
     assert proba.loc["A", "gym"] == pytest.approx(1.0, abs=1e-12)
     assert proba.loc["A", "music"] == pytest.approx(0.0, abs=1e-12)
     assert proba.loc["A", "none"] == pytest.approx(0.0, abs=1e-12)
+
+
+# --- fix round 2 ------------------------------------------------------------------------------------
+
+
+def test_unexplained_counts_only_clients_whose_transactions_the_fit_was_given(fetched):
+    separable_project(fetched)
+    transactions, labels = train_split(fetched)
+    everyone = SurvivalModel().fit(transactions, labels).n_unexplained
+    # labelled with a family, but their transactions are not passed in: not counted
+    dropped = set(labels[labels != "none"].index[:5])
+    subset = transactions[~transactions["client_id"].isin(dropped)]
+    assert SurvivalModel().fit(subset, labels).n_unexplained == everyone
+    # a Client with transactions but no Candidate Stream and a family label still counts
+    with_streams = set(detect_streams(transactions)["client_id"])
+    shopper = next(c for c in labels[labels == "none"].index if c not in with_streams)
+    assert shopper in set(subset["client_id"])
+    relabelled = labels.copy()
+    relabelled[shopper] = "gym"
+    assert SurvivalModel().fit(subset, relabelled).n_unexplained == everyone + 1
+
+
+def test_the_race_order_is_saved_and_a_model_saved_before_it_was_a_setting_races_unprojected_last(fetched, tmp_path):
+    separable_project(fetched)
+    transactions, labels = train_split(fetched)
+    model = SurvivalModel(order="recent-first").fit(transactions, labels)
+    model.save(tmp_path / "survival.json")
+    assert SurvivalModel.load(tmp_path / "survival.json").order == "recent-first"
+    saved = json.loads((tmp_path / "survival.json").read_text())
+    del saved["order"]
+    (tmp_path / "old.json").write_text(json.dumps(saved))
+    assert SurvivalModel.load(tmp_path / "old.json").order == "unprojected-last"
+    assert SurvivalModel().order == DEFAULT_ORDER

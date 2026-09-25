@@ -835,7 +835,9 @@ def cmd_submit(args, paths: Paths) -> int:
     model = _load_model(paths, args.model)
     decision = _load_decision(paths, args.model, args.decision)
     transactions = data.load_transactions(paths.raw, "test")
-    predicted = _decide(model.predict_proba(transactions, expected), decision)
+    with data.predicting():
+        proba = model.predict_proba(transactions, expected)
+    predicted = _decide(proba, decision)
     out = paths.submissions / f"{args.name}.csv"
     write_submission(predicted, expected, out)
     print(f"submit: wrote {out} ({len(expected)} Clients)")
