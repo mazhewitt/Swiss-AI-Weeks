@@ -30,6 +30,7 @@ from .blend import DEFAULT_RULE_WEIGHT
 from .ranker import PSEUDO_WEIGHT, pseudo_examples
 from .rules import DEFAULT_NONE_GATE, DEFAULT_ORDERING, ORDERINGS
 from .streams import LabellerParams, StreamParams, cached_pseudo_labels, cached_streams
+from .survival import DEFAULT_ORDER, ORDERS
 from .submission import InvalidSubmission, read_submission, validate, write_submission
 
 DEFAULT_ZIP = Path("hackathons") / "2026" / "data" / "dataset.zip"
@@ -551,6 +552,8 @@ def _new_model(args, pseudo: pd.DataFrame | None = None, info: dict | None = Non
             return ranker
         weight = DEFAULT_RULE_WEIGHT if args.rule_weight is None else args.rule_weight
         return MODELS["blend"](rules, ranker, weight)
+    if args.model == "survival":
+        return MODELS["survival"](order=args.race_order or DEFAULT_ORDER)
     return MODELS[args.model]()
 
 
@@ -573,6 +576,7 @@ def cmd_train(args, paths: Paths) -> int:
                 "fitted_on": _fitted_on(args.with_selection),
                 "training_clients": len(labels) + pseudo_clients,
                 "pseudo": info,
+                **({"race_order": model.order} if args.model == "survival" else {}),
             }
         )
     )
@@ -898,6 +902,13 @@ def _none_model_argument(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _race_order_argument(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--race-order", choices=ORDERS, metavar="{" + ",".join(ORDERS) + "}",
+        help=f"survival only: how a Client's streams race (default {DEFAULT_ORDER})",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--root", default=".", help="project root (default: current directory)")
@@ -982,6 +993,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--folds", type=int, default=CV_FOLDS, help="folds for the tuned decision layer's out-of-fold fit")
     _pseudo_arguments(p)
     _none_model_argument(p)
+    _race_order_argument(p)
     p.set_defaults(func=cmd_train)
 
     p = sub.add_parser("cv", parents=[common], help="stratified k-fold out-of-fold probabilities")
@@ -992,6 +1004,7 @@ def build_parser() -> argparse.ArgumentParser:
     _rule_arguments(p)
     _pseudo_arguments(p)
     _none_model_argument(p)
+    _race_order_argument(p)
     p.set_defaults(func=cmd_cv)
 
     p = sub.add_parser(
@@ -1064,6 +1077,8 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("give each Pseudo-Label source (split and Shifted Cutoff) once")
         if args.none_model and args.model != "ranker":
             parser.error("--none-model applies to --model ranker only")
+        if args.race_order and args.model != "survival":
+            parser.error("--race-order applies to --model survival only")
     if args.command == "compare" and (len(args.run) < 2 or len(set(args.run)) < len(args.run)):
         parser.error("give at least two distinct --run candidates")
     if args.command == "pseudo-labels":

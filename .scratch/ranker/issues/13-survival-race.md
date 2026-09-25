@@ -164,7 +164,7 @@ Train 5-fold out-of-fold, folds of `rf cv`, `macro_f1s` as in the prototype (`ex
 | V1 `recent-first` | 0.6393 | 0.6414 | 0.6215 | 91 |
 | **V2 `monthly-slot` (new default)** | 0.6343 | 0.6503 | **0.6323** | 212 |
 
-- **V2 is the default:** it has the best nested tuned score, +0.0084 over V0.
+- **V2 is the default:** it has the best nested tuned score, +0.0084 over V0. On train this gain is a tie: a paired bootstrap of nested tuned V2 vs V0 on train out-of-fold gives +0.0084, 95% −0.0075 .. +0.0238. Picking the best of three on the same folds also inflates it slightly. The selection run is the real test.
 - **V0 is still reachable:** `SurvivalModel(order="unprojected-last")`. A model file saved before the order was a setting loads as V0.
 - **The committed candidate is still V0:** `submissions/day2_final_survival.csv` and selection run `20260925T080905-fd1dc5` were made with V0. The selection run and the refit are for the orchestrator to redo.
 - **`rf cv --model survival` with the new default:** argmax 0.6343, tuned 0.6503, nested tuned 0.6239 → 0.6323.
@@ -172,4 +172,13 @@ Train 5-fold out-of-fold, folds of `rf cv`, `macro_f1s` as in the prototype (`ex
 **`n_unexplained`** now counts only labelled Clients whose transactions `fit` was given. A Client with transactions but no Candidate Stream and a family label still counts. The full-train figure is unchanged at 87.
 
 **`rf submit`** now predicts inside `data.predicting()`, for every model. A model that reads any valid label while predicting in submit gets the predicting stage's `LabelLeak`. `day2_final_ranker_none_v2.csv` is still byte-identical.
+
+## Fix round 3
+
+- **`--race-order {unprojected-last,recent-first,monthly-slot}`** on `rf train` and `rf cv`, `--model survival` only (refused for the others). The default is `monthly-slot`. It reaches every fold of the tuned decision layer's out-of-fold fit.
+- **The order is recorded:**
+  - `SurvivalModel.variant` is `""` for `unprojected-last`, so run `20260925T080905-fd1dc5`'s `survival+tuned` keeps its meaning, and `+<order>` otherwise. The default order logs as `survival+monthly-slot+tuned`.
+  - `train` prints the order, and `survival.meta.json` holds `race_order`.
+- **`scripts/day2_final_survival.sh`** pins `--race-order unprojected-last`, so it reproduces the committed `submissions/day2_final_survival.csv` (V0). It has not been re-run here.
+- **The test-validity critic's three tests** are merged into `tests/test_survival.py`: the rolled monthly slot, predict and fit racing by the model's order, and `next_rank` as the place in the race.
 

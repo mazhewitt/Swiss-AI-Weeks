@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from recurring_family import data, survival
+from recurring_family import data, models, survival
+from recurring_family.config import MERCHANT_FAMILIES
 from recurring_family.ranker import FEATURE_COLUMNS
 from recurring_family.streams import detect_streams
 from recurring_family.survival import (
@@ -241,12 +242,13 @@ def test_train_cv_evaluate_and_submit_with_the_tuned_decision(fetched, capsys):
     capsys.readouterr()
     assert fetched.run("train", "--model", "survival", "--decision", "tuned") == 0
     printed = capsys.readouterr().out
-    assert "survival race:" in printed and "left out" in printed
+    assert "survival race (monthly-slot):" in printed and "left out" in printed
     proba = evaluate_proba(fetched, "--decision", "tuned", "--change", "survival race")
     assert list(proba.columns) == LABELS
     np.testing.assert_allclose(proba.sum(axis=1), 1.0, rtol=0, atol=1e-12)
     row = read_rows(fetched.log)[-1]
-    assert (row["model"], row["split"]) == ("survival+tuned", "selection")
+    # the default race order is named in the log's model column
+    assert (row["model"], row["split"]) == ("survival+monthly-slot+tuned", "selection")
     assert float(row["macro_f1"]) >= 0.9, row
 
     assert fetched.run("submit", "--model", "survival", "--decision", "tuned", "--name", "survival") == 0
@@ -519,3 +521,128 @@ def test_the_race_order_is_saved_and_a_model_saved_before_it_was_a_setting_races
     (tmp_path / "old.json").write_text(json.dumps(saved))
     assert SurvivalModel.load(tmp_path / "old.json").order == "unprojected-last"
     assert SurvivalModel().order == DEFAULT_ORDER
+
+
+# --- fix round 3: the race order through the CLI, and the order's own tests -----------------------
+
+
+class OrderRecorder(SurvivalModel):
+    """Records the race order of every model the CLI makes."""
+
+    orders: list = []
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        type(self).orders.append(self.order)
+
+
+@pytest.mark.parametrize("order", ORDERS)
+def test_race_order_reaches_the_model_and_every_fold_of_the_tuned_decision(fetched, monkeypatch, order):
+    separable_project(fetched)
+    monkeypatch.setattr(OrderRecorder, "orders", [])
+    monkeypatch.setitem(models.MODELS, "survival", OrderRecorder)
+    assert fetched.run("train", "--model", "survival", "--race-order", order, "--decision", "tuned", "--folds", "3") == 0
+    assert OrderRecorder.orders == [order] * 4  # the model, then one per fold
+    artifacts = fetched.root / "artifacts"
+    assert json.loads((artifacts / "survival.json").read_text())["order"] == order
+    assert json.loads((artifacts / "survival.meta.json").read_text())["race_order"] == order
+    assert fetched.run("cv", "--model", "survival", "--race-order", order, "--out", str(fetched.root / "oof.csv")) == 0
+    assert OrderRecorder.orders[4:] == [order] * 5
+
+
+def test_without_race_order_the_cli_races_by_the_default_order(fetched, monkeypatch):
+    separable_project(fetched)
+    monkeypatch.setattr(OrderRecorder, "orders", [])
+    monkeypatch.setitem(models.MODELS, "survival", OrderRecorder)
+    assert fetched.run("train", "--model", "survival") == 0
+    assert OrderRecorder.orders == [DEFAULT_ORDER]
+
+
+def test_race_order_applies_to_the_survival_model_only(fetched, capsys):
+    separable_project(fetched)
+    for command in ("train", "cv"):
+        for model in ("ranker", "blend", "rules", "lgbm", "prior"):
+            with pytest.raises(SystemExit):
+                fetched.run(command, "--model", model, "--race-order", "monthly-slot")
+            assert "--race-order" in capsys.readouterr().err
+        with pytest.raises(SystemExit):
+            fetched.run(command, "--model", "survival", "--race-order", "alphabetical")
+
+
+@pytest.mark.parametrize(
+    ("order", "logged"),
+    [("unprojected-last", "survival"), ("recent-first", "survival+recent-first"), ("monthly-slot", "survival+monthly-slot")],
+)
+def test_the_log_names_the_race_order_except_unprojected_last(fetched, order, logged):
+    separable_project(fetched)
+    assert SurvivalModel(order=order).variant == logged.removeprefix("survival")
+    assert fetched.run("train", "--model", "survival", "--race-order", order) == 0
+    assert fetched.run("evaluate", "--model", "survival") == 0
+    assert read_rows(fetched.log)[-1]["model"] == logged
+
+
+def test_a_rolled_monthly_slot_is_the_first_slot_after_the_cutoff():
+    # 40 days ago -> -9.6, rolled ONE month -> 20.8: ahead of a projection at 25 days
+    rows = pd.DataFrame(
+        [("A", "music", 25.0, 3, 0.0), ("A", "gym", np.nan, 1, 40.0)],
+        columns=["client_id", "family", "days_to_next", "n_payments", "days_since_last"],
+    )
+    assert race_order(rows)["family"].tolist() == ["gym", "music"]
+    slot = survival._monthly_slot(pd.Series([10.0, 30.4, 40.0, 60.8, 100.0]))
+    np.testing.assert_allclose(slot, [20.4, 0.0, 20.8, 0.0, 21.6], atol=1e-9)
+
+
+def hand_candidates():
+    """Three Candidate Streams of Client A as `ranker.candidates` would give them (next_rank is the
+    ranker's own, unprojected-last)."""
+    rows = pd.DataFrame(
+        [("A", "gym", np.nan, 1.0, 25.0, 2.0), ("A", "music", 9.0, 5.0, 3.0, 1.0), ("A", "cloud", np.nan, 1.0, 2.0, 3.0)],
+        columns=["client_id", "family", "days_to_next", "n_payments", "days_since_last", "next_rank"],
+    )
+    rows["family"] = pd.Categorical(rows["family"], categories=list(MERCHANT_FAMILIES))
+    for column in FEATURE_COLUMNS:
+        if column not in rows:
+            rows[column] = 0.0
+    return rows
+
+
+RACES = {  # order -> the race, by family
+    "unprojected-last": ["music", "gym", "cloud"],
+    "recent-first": ["music", "cloud", "gym"],
+    "monthly-slot": ["gym", "music", "cloud"],  # gym's slot 5.4, cloud's 28.4
+}
+
+
+@pytest.mark.parametrize("order", ORDERS)
+def test_predict_races_by_the_models_order_and_feeds_next_rank_as_the_place_in_the_race(monkeypatch, order):
+    monkeypatch.setattr(survival, "_streams_of", lambda transactions, clients: None)
+    monkeypatch.setattr(survival, "candidates", lambda streams, cutoff=None: hand_candidates())
+    model = SurvivalModel(constant=0.5, order=order)
+    seen = []
+    monkeypatch.setattr(model, "survival", lambda t: seen.append(t.copy()) or np.full(len(t), 0.5))
+    proba = model.predict_proba(pd.DataFrame(), pd.Index(["A"]))
+    [t] = seen
+    assert t["family"].astype(str).tolist() == RACES[order]
+    assert t["next_rank"].tolist() == [1.0, 2.0, 3.0]
+    # the slot orders only: the unprojected streams' days_to_next stays missing at predict time too
+    assert t.loc[t["family"].astype(str).isin(["gym", "cloud"]), "days_to_next"].isna().all()
+    first = RACES[order][0]
+    assert proba.loc["A", first] == pytest.approx(0.5)  # the first in the race gets s, not s(1-s)
+
+
+@pytest.mark.parametrize(("order", "rows"), [("unprojected-last", 2), ("recent-first", 3), ("monthly-slot", 1)])
+def test_fit_races_by_the_models_order(monkeypatch, order, rows):
+    monkeypatch.setattr(survival, "_streams_of", lambda transactions, clients: None)
+    monkeypatch.setattr(survival, "candidates", lambda streams, cutoff=None: hand_candidates())
+    seen = []
+    fit = survival.lgb.LGBMClassifier.fit
+
+    def spying(self, x, y, *args, **kwargs):
+        seen.append(x.copy())
+        return fit(self, x, y, *args, **kwargs)
+
+    monkeypatch.setattr(survival.lgb.LGBMClassifier, "fit", spying)
+    model = SurvivalModel(order=order).fit(pd.DataFrame({"client_id": ["A"]}), pd.Series({"A": "gym"}))
+    assert model.n_training_rows == rows  # gym's place in the race: every stream up to it trains
+    if seen:  # the fit sees next_rank as the place in the race too
+        assert seen[0]["next_rank"].tolist() == [float(i + 1) for i in range(rows)]

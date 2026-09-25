@@ -161,10 +161,16 @@ class SurvivalModel:
         self.booster = model.booster_
         return self
 
+    @property
+    def variant(self) -> str:
+        """What the experiment log adds to the model name: the race order, unless `unprojected-last`
+        (the order of the runs logged before the order was a setting)."""
+        return "" if self.order == "unprojected-last" else f"+{self.order}"
+
     def summary(self) -> str:
-        """One line for `train`: the fit's rows and the Clients it left out."""
+        """One line for `train`: the race order, the fit's rows and the Clients it left out."""
         return (
-            f"survival race: {self.n_training_rows} training streams; "
+            f"survival race ({self.order}): {self.n_training_rows} training streams; "
             f"{self.n_unexplained} Clients whose label family has no Candidate Stream left out"
         )
 

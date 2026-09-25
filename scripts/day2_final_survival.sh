@@ -8,12 +8,15 @@
 # Clients. This refits on train plus the selection set. Whether to upload it is a human decision. Never
 # reads the sealed holdout.
 #
+# It races unprojected-last (the order of that run), pinned below, so it reproduces the committed file;
+# the model's default order is monthly-slot since ticket 13 fix round 2.
+#
 # Run from the repo root, after `uv run rf fetch-data` and `uv run rf split`:
 #     bash scripts/day2_final_survival.sh
 set -euo pipefail
 
 NAME=day2_final_survival
 
-uv run rf train --model survival --with-selection --decision tuned
+uv run rf train --model survival --race-order unprojected-last --with-selection --decision tuned
 uv run rf submit --model survival --decision tuned --name "$NAME"
 uv run rf submit --check "submissions/$NAME.csv"
