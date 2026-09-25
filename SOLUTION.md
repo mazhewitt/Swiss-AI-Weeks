@@ -94,7 +94,7 @@ On Day 2 another team reached 0.68 on the test leaderboard, against our 0.606. O
 
 Test runs about 0.035 below train, so 0.68 on test needs an extra `none` signal with AUC around 0.97: close to perfect. Picking the wrong stream is a bigger pool in principle (+0.21 if perfect), but our survival probabilities are calibrated, and among streams whose timing is close the order is a coin flip.
 
-**2. What we checked** (tickets 16–19; each pre-registered, reviewed by adversarial critics, and scored on the 700 selection Clients):
+**2. What we checked** (tickets 16–20; each pre-registered, reviewed by adversarial critics, and scored on the 700 selection Clients):
 
 | Idea | Result on selection |
 |---|---|
@@ -105,6 +105,7 @@ Test runs about 0.035 below train, so 0.68 on test needs an extra `none` signal 
 | Decision chosen on the batch itself by expected macro-F1 (no labels) | +0.007 on train; +0.003 on selection (a tie) |
 | **A `none` signal of valid/test's own** (ticket 18) | **found:** the Decoy share of card payments plus refund behaviour predict `none` with AUC 0.81 within the 700 selection Clients. Adding it to the stream features lifts the `none` AUC from 0.82 to 0.87 (paired DeLong p = 0.0002). Train has almost no Decoys, so no train-fitted model could learn it. |
 | That signal stacked onto the hail mary (ticket 19) | 0.597 against 0.598: `none` F1 rises from 0.668 to 0.693, but the family labels give back as much. The hail mary's own P(none) already has AUC 0.878 there, and the new features lift it only to 0.893. |
+| Sociological churn mechanisms (ticket 20): income trend, spend contraction, essential share of spending, price rises, discretionary share of streams, recent stops ("subscription audits") | closed: on top of the hail mary's P(none) they add −0.002 `none` AUC on train and **−0.021** on selection (significantly worse). Only recent stops points the predicted way on both samples, and it shifts between train and test; growing spend, not shrinking, goes with `none` |
 
 **3. Conclusion.** Every honest route lands at 0.59–0.60 on selection. The one new signal is real but small against what the models already know. By the arithmetic above, 0.68 needs a near-perfect `none` signal, and none exists in behavioural features on this data. Whatever the other team does, it is outside what we allowed ourselves.
 
