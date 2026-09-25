@@ -579,6 +579,8 @@ def cmd_train(args, paths: Paths) -> int:
     fitted_on = " + ".join(_fitted_on(args.with_selection))
     if info is None:
         print(f"train: {args.model} fitted on {len(labels)} Clients ({fitted_on}) -> {paths.model(args.model)}")
+        if hasattr(model, "summary"):
+            print(f"  {model.summary()}")
     else:
         print(
             f"train: {args.model} fitted on {len(labels)} real-labelled + {pseudo_clients} Pseudo-Labelled Clients "

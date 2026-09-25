@@ -83,18 +83,28 @@ Baseline: v2's setup (`ranker --none-model`, Pseudo-Labels at 2025-10-03, weight
 
 No holdout checkpoint: the holdout has been used once, for v2.
 
+## Implementation (11:00)
+
+`src/recurring_family/survival.py`: `SurvivalModel` (`--model survival`), registered in `MODELS`, so `rf train|cv|evaluate|submit` and `--decision tuned` work as for the other models. It is the S-rank variant: the ranker's `FEATURE_COLUMNS` from `candidates()` and its `LGBM_PARAMS`, streams from the ranker's `_streams_of` (the same detector defaults and stream cache). `race_order` sorts a Client's streams, `training_rows` builds the fit's rows and counts the unexplained Clients, and `race_proba` combines s into the probabilities. `train` prints the fit's row count and the unexplained Clients; both are also saved with the model (`n_training_rows`, `n_unexplained`). Training with one outcome gives every stream a constant s, as the ranker does. The CLI already refuses `--pseudo`, `--pseudo-*` and `--none-model` for any model but the ranker (and the blend for `--pseudo`), so it refuses them with `--model survival` without a change.
+
+Check: `rf cv --model survival` reproduces the prototype's S-rank out-of-fold probabilities (`oof_S-rank.csv`) to a max abs diff of 3e-16, with the same folds: argmax 0.6322, tuned 0.6418, nested tuned 0.6239. Full train fit: 87 unexplained Clients.
+
+Tests: `tests/test_survival.py` (fast suite).
+
+Byte identity: the fast suite passes (473). `scripts/day2_final_ranker_none_v2.sh` reproduces `submissions/day2_final_ranker_none_v2.csv` byte for byte. `scripts/day2_noon_ranker_pseudo.sh` changes 79 rows of `submissions/day2_noon_ranker_pseudo.csv`, but a clean export of b3d81ea (before this change) writes the same bytes. So the drift is older than this ticket; the committed noon file was made with an earlier detector. It was reverted, not recommitted.
+
 ## Acceptance criteria
 
-- [ ] `rf train|cv|evaluate|submit --model survival` works, with `--decision tuned`. Save then load gives identical probabilities. Rows sum to 1. The log's model column names it
-- [ ] The row-building function is unit-tested on hand-made Clients:
+- [x] `rf train|cv|evaluate|submit --model survival` works, with `--decision tuned`. Save then load gives identical probabilities. Rows sum to 1. The log's model column names it
+- [x] The row-building function is unit-tested on hand-made Clients:
   - label = 2nd stream → rows 1 (target 0) and 2 (target 1) only;
   - `none` → every stream target 0;
   - the label's family not among the candidates → no rows;
   - streams with no projection come last;
   - two streams of the label's family → the first takes target 1
-- [ ] The combination is unit-tested: known s values give the closed-form probabilities, and a family's streams sum
-- [ ] No valid label reaches training (the existing label guards cover `--model survival`). Injecting Decoy Transactions leaves the features unchanged
-- [ ] Every existing output is byte-identical (ranker, ranker `--none-model`, blend, rules, the milestone scripts)
+- [x] The combination is unit-tested: known s values give the closed-form probabilities, and a family's streams sum
+- [x] No valid label reaches training (the existing label guards cover `--model survival`). Injecting Decoy Transactions leaves the features unchanged
+- [x] Every existing output is byte-identical (ranker, ranker `--none-model`, blend, rules, the milestone scripts); the noon file's drift is older than this change (see Implementation)
 - [ ] Train out-of-fold table for variants 1–3 and the baseline, and the diagnostics, recorded here
 - [ ] One selection run logged, predictions committed; the candidate file is valid (`rf submit` check)
-- [ ] Fast test suite passes
+- [x] Fast test suite passes
