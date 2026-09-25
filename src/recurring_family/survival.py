@@ -60,7 +60,8 @@ from numpy.polynomial.hermite_e import hermegauss
 from scipy.special import ndtr
 
 from .config import CUTOFF, LABELS, MERCHANT_FAMILIES, NONE_LABEL
-from .ranker import FEATURE_COLUMNS, LGBM_PARAMS, _streams_of, candidates
+from .ranker import FEATURE_COLUMNS, LGBM_PARAMS, _params_dict, _params_from, _streams_of, candidates
+from .streams import StreamParams
 
 ORDERS = ("unprojected-last", "recent-first", "monthly-slot")
 DEFAULT_ORDER = "monthly-slot"
@@ -292,6 +293,7 @@ class SurvivalModel:
         order: str = DEFAULT_ORDER,
         soft: bool = False,
         soft_fit: bool = False,
+        stream_params: StreamParams | None = None,
     ):
         if order not in ORDERS:
             raise ValueError(f"unknown race order {order!r}; one of {ORDERS}")
@@ -302,6 +304,7 @@ class SurvivalModel:
         self.order = order  # how a Client's streams race (`ORDERS`)
         self.soft = bool(soft)  # average the race over uncertain payment dates (the module docstring)
         self.soft_fit = bool(soft_fit)  # also weight the fit's rows by that uncertainty (lost on train; off)
+        self.stream_params = stream_params  # the stream detector's settings; None is the default detector
         self.booster = booster
         self.constant = constant  # every stream's s when training had one outcome only (or no rows)
         self.n_training_rows: int | None = None
@@ -312,7 +315,7 @@ class SurvivalModel:
         unknown = set(labels) - set(LABELS)
         if unknown:
             raise ValueError(f"labels outside the allowed set: {sorted(unknown)}")
-        table = race_table(_streams_of(transactions, labels.index), order=self.order)
+        table = race_table(_streams_of(transactions, labels.index, self.stream_params), order=self.order)
         present = set(transactions["client_id"].astype(str))
         keep, target, weight, self.n_unexplained = self._training_rows(table, labels, present)
         x, y = table.loc[keep, FEATURE_COLUMNS], target[keep]
@@ -366,7 +369,7 @@ class SurvivalModel:
         return np.asarray(self.booster.predict(table[FEATURE_COLUMNS]), dtype=float)
 
     def predict_proba(self, transactions: pd.DataFrame, clients: pd.Index) -> pd.DataFrame:
-        table = race_table(_streams_of(transactions, clients), order=self.order)
+        table = race_table(_streams_of(transactions, clients, self.stream_params), order=self.order)
         if self.soft:
             return soft_race_proba(table, self.survival(table), race_slot(table, self.order), jitter_scale(table), clients)
         return race_proba(table, self.survival(table), clients)
@@ -384,6 +387,8 @@ class SurvivalModel:
             "n_unexplained": self.n_unexplained,
             "booster": None if self.booster is None else self.booster.model_to_string(),
         }
+        if self.stream_params is not None:
+            saved["stream_params"] = _params_dict(self.stream_params)
         Path(path).write_text(json.dumps(saved))
 
     @classmethod
@@ -397,4 +402,5 @@ class SurvivalModel:
         )
         model.n_training_rows, model.n_unexplained = saved.get("n_training_rows"), saved.get("n_unexplained")
         model.training_weight = saved.get("training_weight")
+        model.stream_params = _params_from(saved.get("stream_params"))
         return model

@@ -130,6 +130,7 @@ class StreamParams:
     stray_min_period_days: float = 7.0  # only a stream whose period is at least this many days takes stray payments
     join_strays: bool = True  # False: stray payments join no stream (the detector before ticket 11)
     join_decoys: bool = False  # True: a Decoy-described payment joins like a stray one (needs join_strays; ticket 12)
+    robust: bool = False  # True: the noise-robust detector (`_robust_client_streams`, ticket 24); off by default
 
 
 # --- per-row evidence ---------------------------------------------------------
@@ -289,6 +290,8 @@ def _detect_per_client(transactions, cutoff, params):
 
 
 def _client_streams(client, payments, refunds, cutoff, params):
+    if params.robust:
+        return _robust_client_streams(client, payments, refunds, cutoff, params)
     ev = [_evidence(d, m) for d, m in zip(payments["description"], payments["mcc"])]
     kind = np.array([e[0] for e in ev], dtype=object)
     families = [e[1] for e in ev]
@@ -406,6 +409,12 @@ def _client_streams(client, payments, refunds, cutoff, params):
     if decoys and params.join_strays:
         _join_on_schedule(sorted(stray + decoys, key=in_order), stream_of, ranges, days, log_amount, params)
 
+    return _stream_rows(client, payments, refunds, cutoff, params, stream_of, streams, hints, ns, log_amount, mcc)
+
+
+def _stream_rows(client, payments, refunds, cutoff, params, stream_of, streams, hints, ns, log_amount, mcc):
+    """Refunds matched, then one summary row per stream (`streams`: (group, low, high) of log amount, group
+    None for a stream merged away or dropped), the membership array and the reversed payments."""
     refund_counts, reversed_ = _match_refunds(refunds, stream_of, [g for g, _, _ in streams], ns, log_amount, params)
 
     times = payments["timestamp"].to_numpy()
@@ -432,6 +441,85 @@ def _client_streams(client, payments, refunds, cutoff, params):
         r["stream_id"] = n
         membership[stream_of == s] = n
     return [r for r, _ in out], membership, reversed_
+
+
+# --- the noise-robust detector (opt-in: `StreamParams.robust`) --------------------------------
+
+
+def _robust_client_streams(client, payments, refunds, cutoff, params):
+    """The noise-robust detector (ticket 24). Valid and test replace about half of real stream payments'
+    descriptions with a Filler Description and about 15% of their MCCs, independently per payment, so a
+    detector that needs a family keyword on the home MCC to start a stream breaks their streams apart.
+
+    - Candidate Streams come from amount and periodicity alone, never from the description: every
+      subscription-like card payment (a family keyword, an ambiguous or a Filler Description, on any MCC;
+      never a shop payment, fee or Decoy Transaction) is clustered by log amount with the amount tolerance.
+      A cluster whose schedule looks like the shorter canonical period (it is two monthly streams at nearby
+      amounts chained into one) is split at its widest amount gap when both parts then look monthly.
+    - A stream's family is the majority vote of its payments' evidence: a family keyword counts 1 for the
+      detection group it names (a description naming two groups counts nothing), the group's home MCC
+      counts 0.5, and a Filler, ambiguous or Decoy description counts 0. Ties go to the group first by name.
+      Music and streaming share a group and are split by description hints, then amount, as by default.
+    - A stream with no family evidence is dropped.
+    - A Decoy-described payment then joins a stream only on its schedule, as with `join_decoys`.
+    """
+    words = [set(_words(d)) for d in payments["description"]]
+    mcc = payments["mcc"].astype(object).to_numpy()
+    description = payments["description"].astype(object).to_numpy()
+    log_amount = np.log(payments["amount"].to_numpy(dtype=float).clip(min=1e-9))
+    ns = pd.DatetimeIndex(payments["timestamp"]).as_unit("ns").asi8
+    days = ns / pd.Timedelta(days=1).value
+    dropped = [not w or bool(w & _SHOP_WORDS) or bool(w & _DECOY_WORDS) for w in words]
+    hints = ["music" if w & _MUSIC_HINTS else "streaming" if w & _STREAMING_HINTS else None for w in words]
+    named = [[g for g, keys in _FAMILY_WORDS.items() if w & keys] for w in words]
+
+    stream_of = np.full(len(words), -1)
+    streams = []  # (group, low, high) of log amount; group None for a dropped stream
+    eligible = np.flatnonzero(~np.asarray(dropped, dtype=bool))
+    if len(eligible):
+        cid = _amount_clusters(log_amount[eligible], params.amount_tolerance)
+        for c in np.unique(cid):
+            for members in _split_on_schedule(eligible[cid == c], log_amount, days, params):
+                votes: dict[str, float] = {}
+                for i in members:
+                    if len(named[i]) == 1:
+                        votes[named[i][0]] = votes.get(named[i][0], 0.0) + 1.0
+                    if mcc[i] in HOME_MCC:
+                        votes[HOME_MCC[mcc[i]]] = votes.get(HOME_MCC[mcc[i]], 0.0) + 0.5
+                if not votes:
+                    continue  # no family evidence: dropped, its payments join no stream
+                best = max(votes.values())
+                stream_of[members] = len(streams)
+                streams.append((sorted(g for g, v in votes.items() if v == best)[0], log_amount[members].min(), log_amount[members].max()))
+
+    decoys = [i for i in np.flatnonzero(stream_of < 0) if _decoy_described(description[i])]
+    if decoys:
+        in_order = lambda i: (ns[i], log_amount[i], str(description[i]), str(mcc[i]))  # never row order
+        ranges = [(lo, hi) for _, lo, hi in streams]
+        _join_on_schedule(sorted(decoys, key=in_order), stream_of, ranges, days, log_amount, params)
+    return _stream_rows(client, payments, refunds, cutoff, params, stream_of, streams, hints, ns, log_amount, mcc)
+
+
+def _base_period(days: np.ndarray, params: StreamParams) -> float:
+    """The canonical period nearest the median gap between the payments on `days`."""
+    median = float(np.median(np.diff(np.sort(days))))
+    return min(params.canonical_periods, key=lambda p: abs(p - median))
+
+
+def _split_on_schedule(idx: np.ndarray, log_amount: np.ndarray, days: np.ndarray, params: StreamParams) -> list[np.ndarray]:
+    """An amount cluster (payment indices `idx`) as one or more Candidate Streams, by periodicity: a cluster
+    of at least four payments whose schedule looks like the shortest canonical period is split at its widest
+    log-amount gap when both parts have at least two payments and look like the longest canonical period
+    (two monthly streams at nearby amounts, chained by the amount tolerance); the parts split again likewise."""
+    short, long_ = min(params.canonical_periods), max(params.canonical_periods)
+    if len(idx) < 4 or _base_period(days[idx], params) != short:
+        return [np.sort(idx)]
+    order = idx[np.argsort(log_amount[idx], kind="stable")]
+    cut = int(np.argmax(np.diff(log_amount[order]))) + 1
+    low, high = order[:cut], order[cut:]
+    if min(len(low), len(high)) < 2 or any(_base_period(days[p], params) != long_ for p in (low, high)):
+        return [np.sort(idx)]
+    return _split_on_schedule(low, log_amount, days, params) + _split_on_schedule(high, log_amount, days, params)
 
 
 def _most_common(values) -> str:

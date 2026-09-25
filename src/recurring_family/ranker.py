@@ -22,6 +22,7 @@ ranker's own `none`, is cross-fitted for the training Clients, so no Client's la
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -33,7 +34,7 @@ from sklearn.model_selection import KFold
 
 from .config import CUTOFF, LABELS, MERCHANT_FAMILIES, NONE_LABEL
 from .none_model import RANKER_NONE, NoneModel, client_features, combine
-from .streams import detect_stream_payments
+from .streams import StreamParams, detect_stream_payments
 
 CANDIDATE_FIELDS = (
     "family",
@@ -163,10 +164,11 @@ class _StreamMemo:
 
     A Client's history is keyed by its transactions' content, so any change to them (an injected
     decoy, a truncated history) is detected afresh. Only streams and their member payments are kept,
-    never labels.
+    never labels. One memo serves one detector setting (`params`; None is the default detector).
     """
 
-    def __init__(self):
+    def __init__(self, params: StreamParams | None = None):
+        self.params = params
         self.table: pd.DataFrame | None = None  # the stream table plus each stream's history key
         self.paid: pd.DataFrame | None = None  # the streams' member payments plus their history key
         self.seen: set[str] = set()
@@ -179,9 +181,7 @@ class _StreamMemo:
         keys = _history_keys(transactions)
         missing = keys[~keys.isin(self.seen)]
         if len(missing):
-            fresh, paid = detect_stream_payments(
-                transactions[transactions["client_id"].astype(str).isin(set(missing.index))]
-            )
+            fresh, paid = self._detect(transactions[transactions["client_id"].astype(str).isin(set(missing.index))])
             fresh["_key"] = fresh["client_id"].astype(str).map(missing).to_numpy()
             paid["_key"] = paid["client_id"].astype(str).map(missing).to_numpy()
             if self.table is None:
@@ -193,7 +193,7 @@ class _StreamMemo:
                     self.paid = pd.concat([self.paid, paid], ignore_index=True)
             self.seen.update(missing)
         if self.table is None:  # no Client history seen yet: an empty, typed stream table
-            return detect_stream_payments(transactions)
+            return self._detect(transactions)
         wanted = set(keys)
         found = self.table[self.table["_key"].isin(wanted)]
         paid = self.paid[self.paid["_key"].isin(wanted)]
@@ -203,6 +203,12 @@ class _StreamMemo:
             .sort_values(["client_id", "stream_id", "timestamp", "amount"], kind="stable")
             .reset_index(drop=True),
         )
+
+
+    def _detect(self, transactions: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+        if self.params is None:
+            return detect_stream_payments(transactions)
+        return detect_stream_payments(transactions, params=self.params)
 
 
 _PRIMES = (1_000_000_007, 998_244_353)
@@ -226,14 +232,36 @@ def _history_keys(transactions: pd.DataFrame) -> pd.Series:
 
 
 _MEMO = _StreamMemo()
+_MEMOS: dict[StreamParams, _StreamMemo] = {}  # one per non-default detector setting (`stream_params`)
 
 
-def _streams_of(transactions: pd.DataFrame, clients: pd.Index) -> pd.DataFrame:
-    return _MEMO.streams(transactions[transactions["client_id"].astype(str).isin(set(map(str, clients)))])
+def _memo(params: StreamParams | None) -> _StreamMemo:
+    if params is None:
+        return _MEMO
+    if params not in _MEMOS:
+        _MEMOS[params] = _StreamMemo(params)
+    return _MEMOS[params]
 
 
-def _detected(transactions: pd.DataFrame, clients: pd.Index) -> tuple[pd.DataFrame, pd.DataFrame]:
-    return _MEMO.detected(transactions[transactions["client_id"].astype(str).isin(set(map(str, clients)))])
+def _streams_of(transactions: pd.DataFrame, clients: pd.Index, params: StreamParams | None = None) -> pd.DataFrame:
+    return _memo(params).streams(transactions[transactions["client_id"].astype(str).isin(set(map(str, clients)))])
+
+
+def _detected(
+    transactions: pd.DataFrame, clients: pd.Index, params: StreamParams | None = None
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    return _memo(params).detected(transactions[transactions["client_id"].astype(str).isin(set(map(str, clients)))])
+
+
+def _params_dict(params: StreamParams | None) -> dict | None:
+    """A detector setting as saved with a model (None: the default detector)."""
+    return None if params is None else {k: list(v) if isinstance(v, tuple) else v for k, v in dataclasses.asdict(params).items()}
+
+
+def _params_from(saved: dict | None) -> StreamParams | None:
+    if saved is None:
+        return None
+    return StreamParams(**{k: tuple(v) if isinstance(v, list) else v for k, v in saved.items()})
 
 
 # --- the model ------------------------------------------------------------------------------
@@ -251,6 +279,7 @@ class RankerModel:
         pseudo: pd.DataFrame | None = None,
         pseudo_weight: float = PSEUDO_WEIGHT,
         none_model: NoneModel | None = None,
+        stream_params: StreamParams | None = None,
     ):
         self.booster = booster
         self.constant = constant  # the score of every candidate when training had one outcome only
@@ -258,6 +287,8 @@ class RankerModel:
         self.pseudo = pseudo
         self.pseudo_weight = pseudo_weight
         self.none_model = none_model  # the Client-level `none` model, fitted with the ranker when given
+        # the stream detector's settings (e.g. `StreamParams(robust=True)`); None is the default detector
+        self.stream_params = stream_params
 
     @property
     def variant(self) -> str:
@@ -276,7 +307,7 @@ class RankerModel:
         return self
 
     def _fit_ranker(self, transactions: pd.DataFrame, labels: pd.Series) -> None:
-        rows = candidates(_streams_of(transactions, labels.index))
+        rows = candidates(_streams_of(transactions, labels.index, self.stream_params))
         x, target, weight = rows[FEATURE_COLUMNS], _targets(rows, labels), None
         if self.pseudo is not None and len(self.pseudo):
             x = pd.concat([x, self.pseudo[FEATURE_COLUMNS]], ignore_index=True)
@@ -294,7 +325,7 @@ class RankerModel:
         """The rows the `none` model trains on: one per labelled Client with at least one Candidate
         Stream. `RANKER_NONE` is cross-fitted: each Client's comes from rankers fitted on the other
         folds (with every Pseudo-Labelled row), so no Client's own label reaches its row."""
-        streams, payments = _detected(transactions, labels.index)
+        streams, payments = _detected(transactions, labels.index, self.stream_params)
         x = client_features(streams, payments)
         if RANKER_NONE in self.none_model.features:
             x.insert(0, RANKER_NONE, self._cross_fitted_none(transactions, labels).reindex(x.index))
@@ -309,7 +340,7 @@ class RankerModel:
             return out
         splitter = KFold(n_splits=min(NONE_FOLDS, len(clients)), shuffle=True, random_state=0)
         for fit_idx, score_idx in splitter.split(clients):
-            ranker = RankerModel(pseudo=self.pseudo, pseudo_weight=self.pseudo_weight)
+            ranker = RankerModel(pseudo=self.pseudo, pseudo_weight=self.pseudo_weight, stream_params=self.stream_params)
             ranker.fit(transactions, labels.iloc[fit_idx])
             out.iloc[score_idx] = ranker.predict_proba(transactions, labels.index[score_idx])[NONE_LABEL].to_numpy()
         return out
@@ -317,7 +348,7 @@ class RankerModel:
     def predict_proba(self, transactions: pd.DataFrame, clients: pd.Index) -> pd.DataFrame:
         if self.booster is None and self.constant is None:
             raise RuntimeError("RankerModel is not fitted")
-        rows = candidates(_streams_of(transactions, clients))
+        rows = candidates(_streams_of(transactions, clients, self.stream_params))
         if self.booster is None:
             score = np.full(len(rows), self.constant, dtype=float)
         else:
@@ -328,7 +359,7 @@ class RankerModel:
             return proba
         # the `none` model scores every requested Client with a Candidate Stream
         ids = proba.index.astype(str)
-        x = client_features(*_detected(transactions, clients))
+        x = client_features(*_detected(transactions, clients, self.stream_params))
         if RANKER_NONE in self.none_model.features:
             x.insert(0, RANKER_NONE, pd.Series(proba[NONE_LABEL].to_numpy(), index=ids).reindex(x.index))
         p_none = self.none_model.predict(x).reindex(ids)
@@ -343,6 +374,8 @@ class RankerModel:
         }
         if self.none_model is not None:
             saved["none_model"] = self.none_model.to_dict()
+        if self.stream_params is not None:
+            saved["stream_params"] = _params_dict(self.stream_params)
         Path(path).write_text(json.dumps(saved))
 
     @classmethod
@@ -352,4 +385,4 @@ class RankerModel:
             raise ValueError(f"{path} was saved with other ranker features; retrain it")
         booster = None if saved["booster"] is None else lgb.Booster(model_str=saved["booster"])
         none_model = NoneModel.from_dict(saved["none_model"]) if "none_model" in saved else None
-        return cls(booster, saved["constant"], none_model=none_model)
+        return cls(booster, saved["constant"], none_model=none_model, stream_params=_params_from(saved.get("stream_params")))
