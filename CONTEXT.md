@@ -49,7 +49,7 @@ Any of a Client's Recurring Streams, considered as the one that will carry the C
 _Avoid_: Option, choice
 
 **Survival Race**:
-A way to predict the Next Recurring Family from a Client's Candidate Streams. Each stream survives the Cutoff with its own probability, and the streams race in projected payment order: the label is the family of the first survivor, or `none` if none survives. Streams behind the label's stream are censored in training: nobody saw whether they would have paid.
+A way to predict the Next Recurring Family from a Client's Candidate Streams. Each stream survives the Cutoff with its own probability, and the streams race in projected payment order: the label is the family of the first survivor, or `none` if none survives. Under the soft race order each stream's payment date is uncertain (its own schedule spread) and the race is averaged over every order the dates allow; `none` is unchanged by the order. Streams behind the label's stream are censored in training: nobody saw whether they would have paid.
 _Avoid_: Churn model, hazard model
 
 **Decoy Transaction**:

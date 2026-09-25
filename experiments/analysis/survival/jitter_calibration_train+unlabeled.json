@@ -1,0 +1,100 @@
+{
+ "streams": 27101,
+ "skipped_missed_slot_k>1": 1568,
+ "two_payment_head_robust_sigma": 6.21308926388889,
+ "two_payment_head_n": 4913,
+ "sqrt_form": {
+  "a": 3.163,
+  "b": 1.079,
+  "wrms": 0.452
+ },
+ "max_form": {
+  "a": 3.612,
+  "b": 1.399,
+  "wrms": 0.203
+ },
+ "fit_bins": [
+  {
+   "bin": "(0.0, 0.5]",
+   "mad": 0.281,
+   "n": 1791,
+   "sigma": 3.869,
+   "sqrt_form": 3.178,
+   "max_form": 3.612
+  },
+  {
+   "bin": "(0.5, 1.0]",
+   "mad": 0.774,
+   "n": 3100,
+   "sigma": 3.48,
+   "sqrt_form": 3.272,
+   "max_form": 3.612
+  },
+  {
+   "bin": "(1.0, 2.0]",
+   "mad": 1.51,
+   "n": 8343,
+   "sigma": 3.566,
+   "sqrt_form": 3.558,
+   "max_form": 3.612
+  },
+  {
+   "bin": "(2.0, 3.0]",
+   "mad": 2.398,
+   "n": 5687,
+   "sigma": 3.671,
+   "sqrt_form": 4.087,
+   "max_form": 3.612
+  },
+  {
+   "bin": "(3.0, 5.0]",
+   "mad": 3.527,
+   "n": 2782,
+   "sigma": 4.642,
+   "sqrt_form": 4.949,
+   "max_form": 4.934
+  },
+  {
+   "bin": "(5.0, inf]",
+   "mad": 6.015,
+   "n": 485,
+   "sigma": 9.393,
+   "sqrt_form": 7.219,
+   "max_form": 8.413
+  }
+ ],
+ "by_period": [
+  {
+   "period_bin": "biweekly",
+   "n": 1593,
+   "robust_sigma": 3.611,
+   "std": 3.424
+  },
+  {
+   "period_bin": "monthly",
+   "n": 25508,
+   "robust_sigma": 4.154,
+   "std": 5.367
+  }
+ ],
+ "tail": {
+  "std_over_robust": 1.302,
+  "excess_kurtosis": 7.64,
+  "within_1sigma": 0.679,
+  "within_2sigma": 0.927,
+  "normal_reference": {
+   "std_over_robust": 1.0,
+   "within_1sigma": 0.683,
+   "within_2sigma": 0.954
+  },
+  "laplace_reference": {
+   "std_over_robust": 1.376,
+   "within_1sigma": 0.757,
+   "within_2sigma": 0.94
+  }
+ },
+ "splits": [
+  "train",
+  "unlabeled"
+ ]
+}

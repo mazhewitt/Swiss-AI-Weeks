@@ -105,6 +105,7 @@ flowchart TB
 | v2: ranker + `none` model + Pseudo-Labels | 0.6082 | 0.5871 | **0.6059** |
 | Survival Race (unprojected-last order) | 0.6239 | **0.5903** | 0.5937 |
 | Survival Race (monthly-slot order) | 0.6323 | 0.5862 | – |
+| Survival Race, soft race order (ticket 14, the amendment below) | 0.6387 | 0.5987 | – |
 
 v2 also scored 0.5960 on the sealed holdout.
 
@@ -136,7 +137,7 @@ It gains most where v2 was weakest: mobile F1 rises from 0.52 to 0.70 and insura
 
 **A hard race order.**
 - For: it is simple and exact given the order.
-- Against: projected dates have jitter, so a soft race that integrates over each stream's schedule uncertainty would be more faithful. Not built.
+- Against: projected dates have jitter, so a soft race that integrates over each stream's schedule uncertainty would be more faithful. Built as `--soft-race` (ticket 14); see the amendment below.
 
 **Single-payment streams have no projected date.**
 - The default is monthly-slot: last payment + 30.4 days, rolled forward past the Cutoff, used only to place the stream in the order. It is best on train (nested +0.008, a tie).
@@ -150,9 +151,37 @@ It gains most where v2 was weakest: mobile F1 rises from 0.52 to 0.70 and insura
 ## Consequences
 
 - **Its own model.** The Survival Race lives beside the Stream Ranker as `--model survival`, and the ranker's code and outputs are unchanged. Tests pin the building of the training rows, the race's closed form, every race order through fit and predict, the label guards and Decoy injection.
-- **Candidates.** `submissions/day2_final_ranker_none_v2.csv` (v2) and `submissions/day2_final_survival.csv` (Survival Race) are the two candidates. Only the best upload counts, and they disagree on 16% of test Clients.
+- **Candidates.** `submissions/day2_final_ranker_none_v2.csv` (v2) and `submissions/day2_final_survival.csv` (Survival Race) are the two candidates. Only the best upload counts, and they disagree on 16% of test Clients. Since ticket 14 the Survival Race candidate is `submissions/day2_final_survival_soft.csv` (the soft race order; it agrees with the hard-race file on 88.6% of test Clients).
 - **Open follow-ups:**
   - a Client-level frailty term;
-  - a soft race order;
+  - ~~a soft race order~~ (ticket 14, the amendment below);
+  - overdue streams that may pay late rather than a period later (ticket 15);
   - an average of v2's and the Survival Race's probabilities;
   - Pseudo-Labels with an `is_pseudo` feature (ticket 13, variant 3, not run).
+
+## Amendment (ticket 14): the soft race order
+
+**Context.** The race order was fixed from projected dates. On the selection set, the true and the picked stream were projected within 3 days of each other in 23 of the 111 wrong-stream Clients. A leave-last-out calibration on train plus unlabeled history (27,101 streams, no labels) shows a stream's real next payment misses its projection by 3.6 days typically, flat until the stream's own schedule MAD passes about 2.6 days and then about 1.4 × MAD; a single-payment stream's monthly slot misses by 6.2 days. So a 3-day gap between two projections is close to a coin toss, and even a 7-day gap (the median in the 111) leaves the later stream a 1-in-6 chance of paying first.
+
+**Decision.** `--soft-race` treats each stream's date as T_i = mu_i + sigma_i Z (normal; mu_i the monthly-slot race slot, sigma_i = max(3.6, 1.4 × `gap_mad_days`), 6.2 for a single-payment stream) and averages the race over every order the dates can produce. With independent dates that is exact and one-dimensional per stream:
+
+- P(stream i is next) = s_i ∫ f_i(t) Π_{j≠i} (1 − s_j F_j(t)) dt, by Gauss-Hermite quadrature (48 nodes);
+- P(`none`) = Π_j (1 − s_j), exactly as in the hard race: **no order, soft or hard, changes a Client's `none` probability**. The soft race only moves mass among detected families, so it cannot touch the `none` buckets of the loss breakdown, only the wrong-stream bucket.
+
+The survival model's fit is unchanged (the hard race's rows). The constants are calibrated on transactions, never tuned on labels.
+
+**Results (train 5-fold out-of-fold, nested tuned macro-F1).**
+
+| | nested tuned | vs the hard monthly-slot race |
+|---|---|---|
+| Hard race, `unprojected-last` (the committed candidate) | 0.6239 | −0.0084 |
+| Hard race, `monthly-slot` | 0.6323 | |
+| **Soft race over the same fit** | **0.6387** | **+0.0064** (95% −0.007 .. +0.019) |
+| Soft race over a soft-weighted fit | 0.6227 | −0.0097 |
+
+Among the 75 train Clients where the hard race picked the wrong stream within 3 days of the true one, the soft race fixes 24 and breaks none (argmax); its 39 fixes and 38 breaks overall net to the nested gain through the decision layer (76 fixed, 60 broken). On the selection set (run `20260925T102231-5456a7`) it scores **0.5987** against 0.5903 for the committed hard-race candidate: +0.0084 (95% −0.016 .. +0.034), a tie, and above the bar fixed before the run, so `submissions/day2_final_survival_soft.csv` (`scripts/day2_final_survival_soft.sh`) replaces `day2_final_survival.csv` as the Survival Race candidate. Mobile (0.70 → 0.73), cloud (0.57 → 0.60) and `none` (0.67 → 0.69) gain; music (0.51 → 0.46) loses.
+
+**Trade-offs.**
+- For: it is the more faithful likelihood for exactly the Clients where a hard order is guesswork; deterministic; a few milliseconds per Client; P(`none`) is provably unchanged, so the model's calibration on `none` carries over.
+- Against: the gain is bounded by the close calls (about 30 flippable Clients in 2,000 on train), so it reads as a tie on 700 selection Clients whatever it does. It assumes independent normal dates; the calibration's tails are heavier than normal (excess kurtosis 7.6), which the core-based sigma ignores. Overdue-and-rolled streams (9.9% of Active Streams) still race a full period out (ticket 15).
+- **Weighting the fit's rows by the same uncertainty lost** (−0.0097 nested): a target-0 row at weight P(T_j < T_m) for a stream due after the label's stream teaches "stopped" to streams that were most likely alive. It stays reachable as `SurvivalModel(soft_fit=True)` from Python, with no CLI flag.
