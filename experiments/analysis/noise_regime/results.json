@@ -1,0 +1,565 @@
+{
+ "step1": {
+  "train": {
+   "all": {
+    "n_on_schedule": 36214,
+    "n_members": 35738,
+    "n_slot": 476,
+    "chance_slot_hits": 152.87,
+    "description": {
+     "own": 0.9427,
+     "filler": 0.05,
+     "decoy": 0.0022,
+     "other_family": 0.0028,
+     "other": 0.0022
+    },
+    "description_noise": 0.0573,
+    "mcc_noise": 0.0379,
+    "members_only": {
+     "description_noise": 0.05,
+     "mcc_noise": 0.034
+    }
+   },
+   "by_family": {
+    "cloud": {
+     "n_on_schedule": 4990,
+     "n_members": 4948,
+     "n_slot": 42,
+     "chance_slot_hits": 4.39,
+     "description": {
+      "own": 0.9519,
+      "filler": 0.0433,
+      "decoy": 0.0023,
+      "other_family": 0.0024,
+      "other": 0.0
+     },
+     "description_noise": 0.0481,
+     "mcc_noise": 0.0436,
+     "members_only": {
+      "description_noise": 0.0424,
+      "mcc_noise": 0.0404
+     }
+    },
+    "gym": {
+     "n_on_schedule": 5106,
+     "n_members": 5021,
+     "n_slot": 85,
+     "chance_slot_hits": 28.91,
+     "description": {
+      "own": 0.9525,
+      "filler": 0.0391,
+      "decoy": 0.0024,
+      "other_family": 0.0017,
+      "other": 0.0044
+     },
+     "description_noise": 0.0475,
+     "mcc_noise": 0.0365,
+     "members_only": {
+      "description_noise": 0.0384,
+      "mcc_noise": 0.0303
+     }
+    },
+    "insurance": {
+     "n_on_schedule": 5135,
+     "n_members": 5047,
+     "n_slot": 88,
+     "chance_slot_hits": 32.38,
+     "description": {
+      "own": 0.9227,
+      "filler": 0.0649,
+      "decoy": 0.0032,
+      "other_family": 0.0064,
+      "other": 0.0028
+     },
+     "description_noise": 0.0773,
+     "mcc_noise": 0.0048,
+     "members_only": {
+      "description_noise": 0.0676,
+      "mcc_noise": 0.0018
+     }
+    },
+    "mobile": {
+     "n_on_schedule": 5387,
+     "n_members": 5288,
+     "n_slot": 99,
+     "chance_slot_hits": 31.45,
+     "description": {
+      "own": 0.9351,
+      "filler": 0.0542,
+      "decoy": 0.0025,
+      "other_family": 0.0037,
+      "other": 0.0046
+     },
+     "description_noise": 0.0649,
+     "mcc_noise": 0.046,
+     "members_only": {
+      "description_noise": 0.0543,
+      "mcc_noise": 0.0395
+     }
+    },
+    "music": {
+     "n_on_schedule": 5052,
+     "n_members": 5013,
+     "n_slot": 39,
+     "chance_slot_hits": 12.49,
+     "description": {
+      "own": 0.9466,
+      "filler": 0.0496,
+      "decoy": 0.0017,
+      "other_family": 0.0013,
+      "other": 0.0007
+     },
+     "description_noise": 0.0534,
+     "mcc_noise": 0.0448,
+     "members_only": {
+      "description_noise": 0.0493,
+      "mcc_noise": 0.0435
+     }
+    },
+    "software": {
+     "n_on_schedule": 5106,
+     "n_members": 5037,
+     "n_slot": 69,
+     "chance_slot_hits": 26.13,
+     "description": {
+      "own": 0.9479,
+      "filler": 0.0464,
+      "decoy": 0.0018,
+      "other_family": 0.0021,
+      "other": 0.0018
+     },
+     "description_noise": 0.0521,
+     "mcc_noise": 0.049,
+     "members_only": {
+      "description_noise": 0.0453,
+      "mcc_noise": 0.0445
+     }
+    },
+    "streaming": {
+     "n_on_schedule": 5438,
+     "n_members": 5384,
+     "n_slot": 54,
+     "chance_slot_hits": 17.11,
+     "description": {
+      "own": 0.943,
+      "filler": 0.052,
+      "decoy": 0.0015,
+      "other_family": 0.0022,
+      "other": 0.0012
+     },
+     "description_noise": 0.057,
+     "mcc_noise": 0.0406,
+     "members_only": {
+      "description_noise": 0.052,
+      "mcc_noise": 0.0375
+     }
+    }
+   },
+   "slot_by_kind": {
+    "own": 44,
+    "filler": 62,
+    "decoy": 85,
+    "other_family": 75,
+    "other": 210
+   },
+   "control_by_kind": {
+    "own": 3,
+    "filler": 52,
+    "decoy": 23,
+    "other_family": 23,
+    "other": 560
+   },
+   "on_over_control_slots": 0.2313,
+   "mcc_noise_given_description": {
+    "own": 0.0287,
+    "not_own": 0.239
+   },
+   "description_noise_dispersion": 1.708,
+   "fragmentation": {
+    "clients": 2000,
+    "streams_per_client": 3.2535,
+    "streams_2plus_per_client": 2.6705,
+    "single_payment_stream_share": 0.1792,
+    "payments_per_stream_2plus": 6.691,
+    "missed_slots_per_stream": 0.3335,
+    "missed_slot_rate": 0.0553,
+    "active_streams_per_client": 1.607,
+    "stream_payments_per_client": 18.452
+   }
+  },
+  "valid": {
+   "all": {
+    "n_on_schedule": 15480,
+    "n_members": 15019,
+    "n_slot": 461,
+    "chance_slot_hits": 76.9,
+    "description": {
+     "own": 0.6131,
+     "filler": 0.3619,
+     "decoy": 0.0171,
+     "other_family": 0.0072,
+     "other": 0.0006
+    },
+    "description_noise": 0.3869,
+    "mcc_noise": 0.121,
+    "members_only": {
+     "description_noise": 0.373,
+     "mcc_noise": 0.1149
+    }
+   },
+   "by_family": {
+    "cloud": {
+     "n_on_schedule": 2003,
+     "n_members": 1953,
+     "n_slot": 50,
+     "chance_slot_hits": 3.62,
+     "description": {
+      "own": 0.6192,
+      "filler": 0.3599,
+      "decoy": 0.0152,
+      "other_family": 0.0058,
+      "other": 0.0
+     },
+     "description_noise": 0.3808,
+     "mcc_noise": 0.1495,
+     "members_only": {
+      "description_noise": 0.3666,
+      "mcc_noise": 0.1413
+     }
+    },
+    "gym": {
+     "n_on_schedule": 2461,
+     "n_members": 2403,
+     "n_slot": 58,
+     "chance_slot_hits": 11.9,
+     "description": {
+      "own": 0.6239,
+      "filler": 0.3591,
+      "decoy": 0.0136,
+      "other_family": 0.0021,
+      "other": 0.0013
+     },
+     "description_noise": 0.3761,
+     "mcc_noise": 0.116,
+     "members_only": {
+      "description_noise": 0.3654,
+      "mcc_noise": 0.1107
+     }
+    },
+    "insurance": {
+     "n_on_schedule": 2206,
+     "n_members": 2110,
+     "n_slot": 96,
+     "chance_slot_hits": 17.76,
+     "description": {
+      "own": 0.5827,
+      "filler": 0.3728,
+      "decoy": 0.0236,
+      "other_family": 0.021,
+      "other": 0.0
+     },
+     "description_noise": 0.4173,
+     "mcc_noise": 0.004,
+     "members_only": {
+      "description_noise": 0.3976,
+      "mcc_noise": 0.0033
+     }
+    },
+    "mobile": {
+     "n_on_schedule": 2234,
+     "n_members": 2164,
+     "n_slot": 70,
+     "chance_slot_hits": 12.38,
+     "description": {
+      "own": 0.6639,
+      "filler": 0.3082,
+      "decoy": 0.0196,
+      "other_family": 0.0069,
+      "other": 0.0014
+     },
+     "description_noise": 0.3361,
+     "mcc_noise": 0.14,
+     "members_only": {
+      "description_noise": 0.3193,
+      "mcc_noise": 0.1326
+     }
+    },
+    "music": {
+     "n_on_schedule": 2121,
+     "n_members": 2065,
+     "n_slot": 56,
+     "chance_slot_hits": 7.62,
+     "description": {
+      "own": 0.5923,
+      "filler": 0.3893,
+      "decoy": 0.0144,
+      "other_family": 0.0037,
+      "other": 0.0003
+     },
+     "description_noise": 0.4077,
+     "mcc_noise": 0.1456,
+     "members_only": {
+      "description_noise": 0.3971,
+      "mcc_noise": 0.139
+     }
+    },
+    "software": {
+     "n_on_schedule": 2245,
+     "n_members": 2182,
+     "n_slot": 63,
+     "chance_slot_hits": 10.67,
+     "description": {
+      "own": 0.6145,
+      "filler": 0.3634,
+      "decoy": 0.0168,
+      "other_family": 0.0053,
+      "other": 0.0
+     },
+     "description_noise": 0.3855,
+     "mcc_noise": 0.1487,
+     "members_only": {
+      "description_noise": 0.3735,
+      "mcc_noise": 0.1384
+     }
+    },
+    "streaming": {
+     "n_on_schedule": 2210,
+     "n_members": 2142,
+     "n_slot": 68,
+     "chance_slot_hits": 10.24,
+     "description": {
+      "own": 0.5922,
+      "filler": 0.382,
+      "decoy": 0.0168,
+      "other_family": 0.0065,
+      "other": 0.0025
+     },
+     "description_noise": 0.4078,
+     "mcc_noise": 0.1471,
+     "members_only": {
+      "description_noise": 0.3936,
+      "mcc_noise": 0.1405
+     }
+    }
+   },
+   "slot_by_kind": {
+    "own": 27,
+    "filler": 31,
+    "decoy": 297,
+    "other_family": 65,
+    "other": 41
+   },
+   "control_by_kind": {
+    "own": 2,
+    "filler": 14,
+    "decoy": 140,
+    "other_family": 35,
+    "other": 132
+   },
+   "on_over_control_slots": 0.2381,
+   "mcc_noise_given_description": {
+    "own": 0.1237,
+    "not_own": 0.1261
+   },
+   "description_noise_dispersion": 1.028,
+   "fragmentation": {
+    "clients": 1000,
+    "streams_per_client": 3.052,
+    "streams_2plus_per_client": 2.129,
+    "single_payment_stream_share": 0.3024,
+    "payments_per_stream_2plus": 7.054,
+    "missed_slots_per_stream": 0.5655,
+    "missed_slot_rate": 0.0854,
+    "active_streams_per_client": 1.38,
+    "stream_payments_per_client": 15.942
+   }
+  },
+  "test": {
+   "all": {
+    "n_on_schedule": 15701,
+    "n_members": 15292,
+    "n_slot": 409,
+    "chance_slot_hits": 70.32,
+    "description": {
+     "own": 0.4664,
+     "filler": 0.5126,
+     "decoy": 0.0145,
+     "other_family": 0.0054,
+     "other": 0.001
+    },
+    "description_noise": 0.5336,
+    "mcc_noise": 0.1533,
+    "members_only": {
+     "description_noise": 0.5249,
+     "mcc_noise": 0.1469
+    }
+   },
+   "by_family": {
+    "cloud": {
+     "n_on_schedule": 2094,
+     "n_members": 2062,
+     "n_slot": 32,
+     "chance_slot_hits": 2.43,
+     "description": {
+      "own": 0.4576,
+      "filler": 0.5338,
+      "decoy": 0.0051,
+      "other_family": 0.0032,
+      "other": 0.0003
+     },
+     "description_noise": 0.5424,
+     "mcc_noise": 0.186,
+     "members_only": {
+      "description_noise": 0.5373,
+      "mcc_noise": 0.1804
+     }
+    },
+    "gym": {
+     "n_on_schedule": 2375,
+     "n_members": 2313,
+     "n_slot": 62,
+     "chance_slot_hits": 13.27,
+     "description": {
+      "own": 0.4597,
+      "filler": 0.5218,
+      "decoy": 0.0122,
+      "other_family": 0.0042,
+      "other": 0.0021
+     },
+     "description_noise": 0.5403,
+     "mcc_noise": 0.1549,
+     "members_only": {
+      "description_noise": 0.5318,
+      "mcc_noise": 0.147
+     }
+    },
+    "insurance": {
+     "n_on_schedule": 2423,
+     "n_members": 2349,
+     "n_slot": 74,
+     "chance_slot_hits": 14.15,
+     "description": {
+      "own": 0.4288,
+      "filler": 0.5353,
+      "decoy": 0.0178,
+      "other_family": 0.0158,
+      "other": 0.0023
+     },
+     "description_noise": 0.5712,
+     "mcc_noise": 0.0131,
+     "members_only": {
+      "description_noise": 0.5607,
+      "mcc_noise": 0.0068
+     }
+    },
+    "mobile": {
+     "n_on_schedule": 2477,
+     "n_members": 2411,
+     "n_slot": 66,
+     "chance_slot_hits": 10.61,
+     "description": {
+      "own": 0.5558,
+      "filler": 0.422,
+      "decoy": 0.0167,
+      "other_family": 0.0031,
+      "other": 0.0024
+     },
+     "description_noise": 0.4442,
+     "mcc_noise": 0.1843,
+     "members_only": {
+      "description_noise": 0.4318,
+      "mcc_noise": 0.1754
+     }
+    },
+    "music": {
+     "n_on_schedule": 1923,
+     "n_members": 1873,
+     "n_slot": 50,
+     "chance_slot_hits": 5.75,
+     "description": {
+      "own": 0.4486,
+      "filler": 0.5308,
+      "decoy": 0.0153,
+      "other_family": 0.0054,
+      "other": 0.0
+     },
+     "description_noise": 0.5514,
+     "mcc_noise": 0.1765,
+     "members_only": {
+      "description_noise": 0.5446,
+      "mcc_noise": 0.1719
+     }
+    },
+    "software": {
+     "n_on_schedule": 2282,
+     "n_members": 2225,
+     "n_slot": 57,
+     "chance_slot_hits": 12.83,
+     "description": {
+      "own": 0.4504,
+      "filler": 0.5343,
+      "decoy": 0.0114,
+      "other_family": 0.0039,
+      "other": 0.0
+     },
+     "description_noise": 0.5496,
+     "mcc_noise": 0.1849,
+     "members_only": {
+      "description_noise": 0.5443,
+      "mcc_noise": 0.1807
+     }
+    },
+    "streaming": {
+     "n_on_schedule": 2127,
+     "n_members": 2059,
+     "n_slot": 68,
+     "chance_slot_hits": 10.17,
+     "description": {
+      "own": 0.4543,
+      "filler": 0.5214,
+      "decoy": 0.0229,
+      "other_family": 0.0014,
+      "other": 0.0
+     },
+     "description_noise": 0.5457,
+     "mcc_noise": 0.1882,
+     "members_only": {
+      "description_noise": 0.5342,
+      "mcc_noise": 0.1807
+     }
+    }
+   },
+   "slot_by_kind": {
+    "own": 26,
+    "filler": 39,
+    "decoy": 270,
+    "other_family": 45,
+    "other": 29
+   },
+   "control_by_kind": {
+    "own": 3,
+    "filler": 23,
+    "decoy": 194,
+    "other_family": 39,
+    "other": 59
+   },
+   "on_over_control_slots": 0.2211,
+   "mcc_noise_given_description": {
+    "own": 0.1643,
+    "not_own": 0.1497
+   },
+   "description_noise_dispersion": 1.017,
+   "fragmentation": {
+    "clients": 1000,
+    "streams_per_client": 2.869,
+    "streams_2plus_per_client": 2.009,
+    "single_payment_stream_share": 0.2998,
+    "payments_per_stream_2plus": 7.612,
+    "missed_slots_per_stream": 0.5749,
+    "missed_slot_rate": 0.08,
+    "active_streams_per_client": 1.372,
+    "stream_payments_per_client": 16.152
+   }
+  }
+ }
+}
