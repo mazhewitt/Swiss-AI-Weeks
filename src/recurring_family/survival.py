@@ -3,7 +3,8 @@
 A LightGBM binary model gives every Candidate Stream a survival probability s, from exactly the Stream
 Ranker's features (`ranker.candidates`, so the stream table only: ADR 0001). A Client's streams race in
 projected payment order: `days_to_next` ascending, streams with no projection (one payment) last, ties
-to the stream with more payments, otherwise in stream-table order. Then
+to the stream with more payments, otherwise in stream-table order (so ties among unprojected, single-payment
+streams fall back to stream-table order: a known follow-up). Then
 
     P(stream i is next) = s_i * prod_{j before i} (1 - s_j)
     P(`none`)           = prod_j (1 - s_j)
@@ -31,10 +32,6 @@ import pandas as pd
 
 from .config import CUTOFF, LABELS, MERCHANT_FAMILIES, NONE_LABEL
 from .ranker import FEATURE_COLUMNS, LGBM_PARAMS, _streams_of, candidates
-
-# the largest s that enters log(1 - s), so a certain survivor still leaves later streams a finite weight
-_S_MAX = 1 - 1e-9
-
 
 def race_order(rows: pd.DataFrame) -> pd.DataFrame:
     """Candidate rows (`ranker.candidates`) sorted into race order per Client, with `order` 0, 1, ...:
@@ -73,11 +70,11 @@ def race_proba(table: pd.DataFrame, s: np.ndarray, clients: pd.Index) -> pd.Data
     exactly `LABELS`, summing to 1. A Client without rows is certainly `none`."""
     clients = pd.Index(clients, name="client_id")
     client = table["client_id"].astype(str).to_numpy()
-    s = pd.Series(np.asarray(s, dtype=float), index=table.index)
-    log_left = pd.Series(np.log1p(-np.clip(s.to_numpy(), 0.0, _S_MAX)), index=table.index)
-    # log prod_{j before i} (1 - s_j): the Client's running sum, shifted by one stream
-    before = log_left.groupby(client).cumsum().groupby(client).shift(1, fill_value=0.0)
-    p = pd.DataFrame({"client_id": client, "family": table["family"].astype(str).to_numpy(), "p": s * np.exp(before)})
+    s = pd.Series(np.clip(np.asarray(s, dtype=float), 0.0, 1.0), index=table.index)
+    # prod_{j before i} (1 - s_j): the Client's running product, shifted by one stream; a certain survivor
+    # (s = 1) leaves every stream behind it exactly 0
+    before = (1.0 - s).groupby(client).cumprod().groupby(client).shift(1, fill_value=1.0)
+    p = pd.DataFrame({"client_id": client, "family": table["family"].astype(str).to_numpy(), "p": s * before})
     families = p.groupby(["client_id", "family"])["p"].sum().unstack("family")
     out = families.reindex(index=clients.astype(str), columns=list(MERCHANT_FAMILIES)).fillna(0.0).astype(float)
     out.index = clients
