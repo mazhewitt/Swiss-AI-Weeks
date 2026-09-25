@@ -12,6 +12,12 @@ set -euo pipefail
 D=experiments/analysis/none_stack
 NAME=day2_final_none_stack
 
+# the hail mary's train-only rehearsal caches (git-ignored), which base_test.py checks against and E3 is fitted on
+H=experiments/analysis/hailmary/hailmary.py
+for M in v2 surv; do
+    uv run python "$H" oof rehearsal "$M"
+    uv run python "$H" fit rehearsal "$M"
+done
 uv run python "$D/base_test.py" v2    # train-only v2: selection (checked against hail mary's cache) and test
 uv run python "$D/base_test.py" surv  # train-only hard race, likewise
 uv run python "$D/none_stack.py" predict

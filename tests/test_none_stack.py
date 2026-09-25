@@ -83,3 +83,4 @@ def test_stacker_input_is_the_logit_plus_the_ranked_block():
     assert list(x.columns) == [stacking.LOGIT_COLUMN, "x"]
     assert x.loc["a", stacking.LOGIT_COLUMN] == pytest.approx(np.log(0.6 / 0.4))
     assert np.isfinite(x[stacking.LOGIT_COLUMN]).all()  # P_B(none) of 0 and 1 are clipped
+    np.testing.assert_allclose(x["x"], [0.75, 0.25, 0.5, 1.0])  # the raw block arrives ranked, not raw

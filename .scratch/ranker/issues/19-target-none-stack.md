@@ -1,6 +1,6 @@
 # 19: Build — a target-domain `none` stacker on the hail-mary average
 
-Status: ready-for-agent
+Status: done
 
 **Why:** ticket 18's gate passed. On the 700 selection Clients, raw transaction features predict `none` with AUC 0.807, and adding them to the stream features lifts the `none` AUC from 0.821 to 0.873 (paired DeLong +0.052, p = 0.0002). The lead feature is the Decoy share of card payments. Train has almost no Decoys, so only valid labels can teach it, and it drifts from selection to test (mean 0.27 against 0.39). **Deadline: final file by 16:45 CEST.**
 
@@ -45,7 +45,7 @@ Status: ready-for-agent
 - [x] `experiments/analysis/none_stack/` (script, frozen predictions, `results.json`)
 - [x] The rehearsal table and the rule applied, recorded here
 - [x] The final file plus its script, validated with `rf submit --check` (a clean end-to-end run of the script reproduced it byte for byte, sha256 d0ba3119…; `predictions/` and `results.json` unchanged)
-- [ ] Three critics; blocking findings fixed
+- [x] Critics (two: spec and test validity merged, plus leakage and regression); none blocking
 - [x] The sealed holdout is never read
 
 ## Result
@@ -95,3 +95,13 @@ qualify: d > 0, disagreement ≥ 10%). By d̃: hail mary A −0.0076, N −0.010
   (205/700) and N predicts 173/700 (24.7%) there. Mean P'(none) is 0.280 on selection (out of fold) and 0.293 on
   test: the within-domain ranks remove the Decoy share's level shift, so there is no large `none` jump. Part of
   the gap to 214 is the train-only base (B+E3 on test already gives 247).
+
+## Review
+
+- **Spec and test validity (one critic):** none blocking. The design conforms to the pre-registration (d991616), the upload rule was applied with ticket 17's pool values and the same resamples, and there is no leakage path in the nested CV. Fixed:
+  - the final script now builds the hail mary's git-ignored rehearsal caches first, so it runs from a fresh clone;
+  - the stacker-input test now asserts that the raw block arrives ranked.
+- **Open (non-blocking):**
+  - **Extra optimism:** N's selection P' averages 5 models fitted on 560 Clients each, while test gets one model fitted on 700. This may flatter N's selection score slightly. It changes no choice, since N ranks below B+E3.
+  - **Untested rebuild path:** if ticket 18's git-ignored raw caches are missing, `none_stack.py` rebuilds them from `hm.target` and the sample submission rather than ticket 18's inputs. By reading the code these give the same rows, and shape and column asserts guard them, but the path has not been run.
+- **Leakage and regression:** see below.
