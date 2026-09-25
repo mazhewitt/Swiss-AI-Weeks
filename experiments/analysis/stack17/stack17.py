@@ -266,6 +266,7 @@ def stage_final() -> None:
         mine = e3(domain, single_oof(domain, m)).apply(single_target(domain, m))
         committed = committed_test(name)
         checks[f"{m} alone vs {name}.csv"] = round(float((mine.reindex(committed.index) == committed).mean()), 4)
+        assert checks[f"{m} alone vs {name}.csv"] == 1.0, f"{m}: final refit does not reproduce {name}.csv"
     expected = data.load_sample_submission(PATHS.raw)["client_id"].astype(str)
     for name, predicted in out.items():
         assert predicted.notna().all() and set(predicted.index) == set(expected), f"{name}: incomplete test predictions"

@@ -26,6 +26,14 @@ def test_hand_computed_expected_macro_f1():
     assert decision_layer.expected_macro_f1(predicted, p) == pytest.approx(expected)
 
 
+def test_hand_computed_expected_macro_f1_with_mixed_predictions():
+    p = proba([{"cloud": 0.6, "none": 0.4}, {"cloud": 0.3, "none": 0.7}])
+    predicted = pd.Series(["cloud", "none"], index=p.index)
+    # cloud: E[TP] = 0.6, predicted 1, E[true] = 0.9; none: E[TP] = 0.7, predicted 1, E[true] = 1.1
+    expected = (2 * 0.6 / (1 + 0.9) + 2 * 0.7 / (1 + 1.1)) / 8
+    assert decision_layer.expected_macro_f1(predicted, p) == pytest.approx(expected)
+
+
 def test_one_hot_probabilities_give_the_realised_macro_f1():
     rng = np.random.default_rng(0)
     truth = pd.Series(rng.choice(LABELS, size=60), index=[f"C{i:03d}" for i in range(60)])

@@ -22,7 +22,7 @@ This ticket runs the two cheapest candidates for the 17:30 upload.
 
 ## 2. The batch expected-macro-F1 decision (D)
 
-For a set of Client probabilities and any decision in E3's grid (the same parameters and grid as `decision_layer`), compute the **expected** macro-F1 on that batch:
+For a set of Client probabilities and any decision reached by E3's search over E3's grid (the same parameters, grid and coordinate ascent as `decision_layer`), compute the **expected** macro-F1 on that batch:
 - the probabilities stand in as soft labels;
 - for each label c, E[TP_c] = Σ over Clients predicted c of p_ic, and E[true_c] = Σ_i p_ic;
 - F1_c = 2·E[TP_c] / (#predicted c + E[true_c]);
@@ -38,7 +38,7 @@ Pick the grid decision with the highest expected macro-F1. No labels are used.
 - **Rehearsal (if Gate A passes):** pick D on the 700 selection Clients' S probabilities, without labels. Freeze D's and E3's predictions before any selection label is read.
 - **Final:** pick D on the 1,000 test Clients' S probabilities.
 
-## Scoring (selection labels read once, in `data.scoring()`, after every prediction above is frozen)
+## Scoring (selection labels are read only by the final refit, as training labels, and once in `data.scoring()` after every selection prediction is frozen)
 
 - For S, S+D, and the existing pool: v2 0.5871 (run e309a3), the soft race 0.5987 (run 5456a7), and hail mary A 0.5983:
   - macro-F1;
@@ -49,7 +49,7 @@ Pick the grid decision with the highest expected macro-F1. No labels are used.
 ## Upload rule (fixed before any number above)
 
 1. **The pool:** candidates with a positive selection point estimate against v2, and whose test file disagrees with v2's on at least 10% of test Clients.
-2. **Ranking:** rank the pool by the shrunk delta d̃ = d − 1.7·SE_paired. This is the winner's-curse correction for about 15 things tried.
+2. **Ranking:** rank the pool by the shrunk delta d̃ = d − 1.7·SE_paired, where SE_paired is the standard deviation (ddof=1) of the 2,000 paired bootstrap deltas. This is the winner's-curse correction for about 15 things tried.
 3. **The 17:30 upload** is the top-ranked candidate. If the pool is empty, the committed hail-mary file stays.
 4. **Claims** follow the 0.03 rule only. None of these is expected to pass it.
 
@@ -58,7 +58,7 @@ Pick the grid decision with the highest expected macro-F1. No labels are used.
 - [x] Stages in `experiments/analysis/stack17/` (or as extensions of `hailmary.py`), with results in `results.json`.
 - [x] Gate A result, the rehearsal table and the rule applied as written, all recorded in this ticket.
 - [x] If the pool's top is new (it is not: nothing to write): `submissions/day2_final_<name>.csv` plus `scripts/day2_final_<name>.sh`, validated with `rf submit --check`.
-- [ ] Three critics (spec, test validity, leakage and regression); blocking findings fixed.
+- [x] Three critics (spec, test validity, leakage and regression); blocking findings fixed (none were blocking).
 - [x] The sealed holdout is never read.
 
 ## Gate A (train out-of-fold, S's probabilities; train labels only)
@@ -76,12 +76,12 @@ the 2,000 train Clients.
 | 4 | 400 | 0.6565 | 0.6635 | 0.5985 |
 | **Pooled** | 2,000 | **0.6384** | **0.6454** | |
 
-**Pass:** D − nested E3 = +0.0070 ≥ −0.01. `none` share: true 0.299, nested E3 0.271, D 0.240.
+**Pass:** D − nested E3 = +0.0070 ≥ −0.01. `none` share: true 0.2985, nested E3 0.271, D 0.240.
 
 Reliability of S's out-of-fold P(none) by decile (mean P(none) → observed `none` rate): 0.031→0.000,
 0.057→0.000, 0.085→0.045, 0.117→0.075, 0.158→0.110, 0.214→0.180, 0.298→0.305, 0.469→0.585, 0.745→0.795,
-0.927→0.890. Over-confident at the low end (the bottom fifth has no `none` at all), under-confident in deciles
-8–9. D's expected macro-F1 (~0.60) sits well below its realised one (~0.645), so the soft labels are pessimistic
+0.927→0.890. Under-confident at the low end (it predicts some `none` where the bottom fifth has none at all), and
+under-confident in deciles 8–9 too. D's expected macro-F1 (~0.60) sits well below its realised one (~0.645), so the soft labels are pessimistic
 in level, but their ranking of decisions was good enough to pass.
 
 ## Rehearsal result (selection, 700 Clients; fitted on train only)
@@ -121,10 +121,33 @@ selection Clients picked no threshold, `none` weight 0.84 and family weights 1.0
 - **D helps S a little, as Gate A said** (+0.0026 on selection, +0.0070 on train), by predicting less `none`
   than E3 at the level the batch's own probabilities expect. Still a tie.
 - Post hoc, S's P(none) on selection: mean 0.305 against a `none` share of 0.293; Platt slope 0.53 (intercept
-  −0.48), so over-confident at both ends (top decile 0.946 → 0.814; bottom three 0.03–0.08 → 0.014). The level
-  is right; the spread is too wide. Explanation only; nothing was fitted on it.
+  −0.48). The slope is mostly an artefact: 31 Clients have P(none) exactly 1.0, and the 1e-6 clip puts them at
+  logit 13.8, where they set the slope (critic's toy check: 0.60 at this clip, 1.02 without them). By decile, the
+  top is over-confident (0.946 → 0.814) and the bottom three are under-confident (0.03–0.08 → 0.014). The level
+  is right. Explanation only; nothing was fitted on it.
 
 **Note on the hail-mary entry:** the spec lists hail mary A at 0.5983, so the pool uses A's selection
 predictions. The committed hail-mary file, whose test disagreement is used, is the self-training configuration
 (survival only, q 0.6, 0.5980 on selection) that ticket 14's rule chose, not A itself. The two are a tie
 (−0.0003) and the rule's outcome is the committed file either way.
+
+## Review
+
+Three critics (spec, test validity, and leakage/regression). **None blocking.**
+
+- **Spec:** every element conforms; the 10% cut is exact (99 and 100 of 1,000 Clients). None of the three stated deviations changes the file.
+- **Leakage:**
+  - the committed code reproduces all five frozen selection prediction files from train labels alone;
+  - D on test reads no labels;
+  - the pre-registered rule is unchanged between the pre-registration and the scoring commit.
+- **Regression:**
+  - `decision.fit()` is identical before and after the refactor, over 25 cases;
+  - full pytest: 530 passed;
+  - `rf submit --check` passes on the hail-mary file.
+- **Fixed in this round:**
+  - wording: E3's search, when selection labels are read, the SE definition, and the calibration reading (the Platt slope is driven by the P(none) = 1 Clients);
+  - a hand-computed test with mixed predictions (it catches the one surviving formula mutant);
+  - the final stage now asserts the single-model reproduction instead of only recording it.
+- **Open (non-blocking):**
+  - `data.valid_split` reads the valid label file, holdout rows included, without the guard, to stratify the split (older code). Only membership comes out; the cached `artifacts/valid_split.csv` could be used instead.
+  - The hail-mary pool entry pairs A's selection score with the committed self-training file's test disagreement. They tie (−0.0003), and either reading keeps the same file.
