@@ -1,6 +1,6 @@
 # 17: Pre-registered stack and a batch expected-macro-F1 decision
 
-Status: ready-for-agent
+Status: ready-for-human
 
 **Why:** another team reached 0.68 on test. A research round (web sources plus train-only simulation) found:
 - to reach 0.68 through `none` we would need a new `none` signal with AUC ≈ 0.97 stacked on the race: a near-oracle;
@@ -55,8 +55,76 @@ Pick the grid decision with the highest expected macro-F1. No labels are used.
 
 ## Acceptance
 
-- [ ] Stages in `experiments/analysis/stack17/` (or as extensions of `hailmary.py`), with results in `results.json`.
-- [ ] Gate A result, the rehearsal table and the rule applied as written, all recorded in this ticket.
-- [ ] If the pool's top is new: `submissions/day2_final_<name>.csv` plus `scripts/day2_final_<name>.sh`, validated with `rf submit --check`.
+- [x] Stages in `experiments/analysis/stack17/` (or as extensions of `hailmary.py`), with results in `results.json`.
+- [x] Gate A result, the rehearsal table and the rule applied as written, all recorded in this ticket.
+- [x] If the pool's top is new (it is not: nothing to write): `submissions/day2_final_<name>.csv` plus `scripts/day2_final_<name>.sh`, validated with `rf submit --check`.
 - [ ] Three critics (spec, test validity, leakage and regression); blocking findings fixed.
-- [ ] The sealed holdout is never read.
+- [x] The sealed holdout is never read.
+
+## Gate A (train out-of-fold, S's probabilities; train labels only)
+
+Per outer fold (the `rf cv` folds), D is picked on the held-out fold's own S probabilities and scored on that
+fold's labels; nested E3 is fitted on the other four folds' out-of-fold probabilities. Predictions pooled over
+the 2,000 train Clients.
+
+| Fold | n | Nested E3 | D | D's expected macro-F1 |
+|---|---|---|---|---|
+| 0 | 400 | 0.6287 | 0.6375 | 0.6027 |
+| 1 | 400 | 0.6539 | 0.6475 | 0.5976 |
+| 2 | 400 | 0.6111 | 0.6371 | 0.5893 |
+| 3 | 400 | 0.6369 | 0.6389 | 0.6049 |
+| 4 | 400 | 0.6565 | 0.6635 | 0.5985 |
+| **Pooled** | 2,000 | **0.6384** | **0.6454** | |
+
+**Pass:** D − nested E3 = +0.0070 ≥ −0.01. `none` share: true 0.299, nested E3 0.271, D 0.240.
+
+Reliability of S's out-of-fold P(none) by decile (mean P(none) → observed `none` rate): 0.031→0.000,
+0.057→0.000, 0.085→0.045, 0.117→0.075, 0.158→0.110, 0.214→0.180, 0.298→0.305, 0.469→0.585, 0.745→0.795,
+0.927→0.890. Over-confident at the low end (the bottom fifth has no `none` at all), under-confident in deciles
+8–9. D's expected macro-F1 (~0.60) sits well below its realised one (~0.645), so the soft labels are pessimistic
+in level, but their ranking of decisions was good enough to pass.
+
+## Rehearsal result (selection, 700 Clients; fitted on train only)
+
+Checks (asserted in `score`): v2 alone and the soft race alone reproduce runs e309a3 and 5456a7 with 100%
+agreement; the recomputed hail mary A reproduces its committed predictions (100%). In the final, the single-model
+refits reproduce `day2_final_ranker_none_v2.csv` and `day2_final_survival_soft.csv` exactly.
+
+Paired bootstrap against v2's run e309a3: 2,000 resamples, seed 0 (the resamples of
+`submissions/day2_final_compare_soft.md`); SE is the standard deviation of the paired deltas over them. Test
+disagreement is against `submissions/day2_final_ranker_none_v2.csv`.
+
+| Candidate | Macro-F1 | d vs v2 (95%) | SE paired | d̃ = d − 1.7 SE | Test disagreement | Pool |
+|---|---|---|---|---|---|---|
+| v2 (run e309a3) | 0.5871 | — | — | — | — | no (reference) |
+| Soft race (run 5456a7) | 0.5987 | +0.0116 (−0.0178 .. +0.0415) | 0.0152 | −0.0142 | 0.165 | yes |
+| **Hail mary A** | **0.5983** | +0.0111 (−0.0099 .. +0.0327) | 0.0110 | **−0.0076** | 0.104 | **yes (top)** |
+| S (E3) | 0.5923 | +0.0052 (−0.0183 .. +0.0292) | 0.0121 | −0.0154 | 0.099 | no (< 10%) |
+| S+D | 0.5949 | +0.0078 (−0.0155 .. +0.0311) | 0.0120 | −0.0126 | 0.100 | yes |
+
+Selection decisions: S's E3 (fitted on train out-of-fold) uses a `none` threshold of 0.52; D on the 700
+selection Clients picked no threshold, `none` weight 0.84 and family weights 1.0–1.19 (expected macro-F1
+0.6175 vs 0.6158 for argmax).
+
+**The rule, applied as written:**
+1. **Pool:** hail mary A, S+D and the soft race (positive d, test disagreement ≥ 10%). S is out: d > 0 but it
+   disagrees with v2 on 99 of 1,000 test Clients (9.9%).
+2. **Ranking by d̃:** hail mary A −0.0076, S+D −0.0126, the soft race −0.0142.
+3. **The 17:30 upload is the committed hail-mary file,** `submissions/day2_final_hailmary.csv`. Nothing new is
+   written.
+4. **Claims:** every delta is under 0.03, so all are ties with v2.
+
+**Reading:**
+- **The soft race does not stack better than the hard race.** S (0.5923) is below both the soft race alone
+  (0.5987) and hail mary A (0.5983). The soft race moves only the split among detected families, and v2 already
+  covers most of that; averaging gives back part of the soft race's own gain.
+- **D helps S a little, as Gate A said** (+0.0026 on selection, +0.0070 on train), by predicting less `none`
+  than E3 at the level the batch's own probabilities expect. Still a tie.
+- Post hoc, S's P(none) on selection: mean 0.305 against a `none` share of 0.293; Platt slope 0.53 (intercept
+  −0.48), so over-confident at both ends (top decile 0.946 → 0.814; bottom three 0.03–0.08 → 0.014). The level
+  is right; the spread is too wide. Explanation only; nothing was fitted on it.
+
+**Note on the hail-mary entry:** the spec lists hail mary A at 0.5983, so the pool uses A's selection
+predictions. The committed hail-mary file, whose test disagreement is used, is the self-training configuration
+(survival only, q 0.6, 0.5980 on selection) that ticket 14's rule chose, not A itself. The two are a tie
+(−0.0003) and the rule's outcome is the committed file either way.
