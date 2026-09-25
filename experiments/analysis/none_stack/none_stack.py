@@ -91,8 +91,8 @@ def base(domain: str) -> pd.DataFrame:
 def raw_blocks() -> tuple[pd.DataFrame, pd.DataFrame]:
     """Ticket 18's 130 raw features on selection and on test (test uses selection's MCC list, as ticket 18)."""
     sel_tx, sel_clients = hm.target("rehearsal")
-    _, sel_raw, mccs = blocks(sel_tx.assign(client_id=sel_tx["client_id"].astype(str)),
-                              pd.Index(sorted(sel_clients), name="client_id"), cache=RAW_CACHE / "selection")
+    # exactly as ticket 18 built them (its `diagnostic.py`), so a missing cache is rebuilt the same way
+    _, sel_raw, mccs = blocks(sel_tx, pd.Index(sorted(sel_clients), name="client_id"), cache=RAW_CACHE / "selection")
     test_tx, test_clients = hm.target("final")
     _, test_raw, _ = blocks(test_tx.assign(client_id=test_tx["client_id"].astype(str)),
                             pd.Index(sorted(test_clients), name="client_id"), mccs=mccs, cache=RAW_CACHE / "test")

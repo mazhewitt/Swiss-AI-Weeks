@@ -1,0 +1,211 @@
+{
+ "predict": {
+  "design": {
+   "stacker_params": {
+    "n_estimators": 200,
+    "learning_rate": 0.03,
+    "num_leaves": 7,
+    "min_child_samples": 30,
+    "subsample": 0.8,
+    "subsample_freq": 1,
+    "colsample_bytree": 0.7,
+    "random_state": 0,
+    "deterministic": true,
+    "force_row_wise": true,
+    "n_jobs": 1
+   },
+   "cv": "5 repeats x 5-fold stratified (seeds 0-4) on the 700 selection Clients, P'(none) averaged",
+   "features": "logit P_B(none) + 130 raw features ranked within domain",
+   "selection_none": 205
+  },
+  "checks": {
+   "B+E3 vs hail mary A's committed selection predictions": 1.0,
+   "N rows sum to 1": true,
+   "degenerate P_B(none)=1 rows": {
+    "selection": 31,
+    "test": 54
+   }
+  },
+  "stacker_top_gain": {
+   "logit_pb_none": 3807.0,
+   "decoy_share_of_card": 660.0,
+   "refund_type_gap_median": 382.0,
+   "type_share_refund": 305.0,
+   "last_refund_days": 214.0,
+   "refund_type_first_days": 195.0,
+   "refund_type_share_of_card": 193.0,
+   "refund_type_amount_mean": 176.0,
+   "decoy_rate90_minus_before": 172.0,
+   "n_decoy_90": 149.0,
+   "n_desc": 140.0,
+   "card_amount_max": 134.0,
+   "n_tx_90": 134.0,
+   "cur_share_eur": 128.0,
+   "last_family_named_days": 128.0
+  },
+  "mean_p_none": {
+   "B selection": 0.311,
+   "N selection (oof)": 0.2798,
+   "B test": 0.3147,
+   "N test": 0.2925
+  },
+  "decisions": {
+   "selection": {
+    "B_E3": {
+     "weights": {
+      "cloud": 1.0,
+      "gym": 1.0,
+      "insurance": 1.4142135623730951,
+      "mobile": 1.189207115002721,
+      "music": 1.189207115002721,
+      "software": 0.7071067811865476,
+      "streaming": 1.0,
+      "none": 1.0
+     },
+     "none_threshold": 0.55
+    },
+    "B_D": {
+     "weights": {
+      "cloud": 1.0,
+      "gym": 1.0,
+      "insurance": 1.0,
+      "mobile": 1.189207115002721,
+      "music": 1.0,
+      "software": 1.0,
+      "streaming": 1.0,
+      "none": 0.8408964152537145
+     },
+     "none_threshold": null,
+     "argmax_expected_macro_f1": 0.6332,
+     "expected_macro_f1": 0.6339
+    },
+    "N": {
+     "weights": {
+      "cloud": 1.189207115002721,
+      "gym": 1.0,
+      "insurance": 1.189207115002721,
+      "mobile": 1.189207115002721,
+      "music": 1.4142135623730951,
+      "software": 1.189207115002721,
+      "streaming": 1.189207115002721,
+      "none": 0.8408964152537145
+     },
+     "none_threshold": null,
+     "argmax_expected_macro_f1": 0.641,
+     "expected_macro_f1": 0.6436
+    }
+   },
+   "test": {
+    "B_D": {
+     "weights": {
+      "cloud": 1.189207115002721,
+      "gym": 1.0,
+      "insurance": 1.0,
+      "mobile": 1.189207115002721,
+      "music": 1.189207115002721,
+      "software": 1.189207115002721,
+      "streaming": 1.189207115002721,
+      "none": 0.8408964152537145
+     },
+     "none_threshold": null,
+     "argmax_expected_macro_f1": 0.6387,
+     "expected_macro_f1": 0.6398
+    },
+    "N": {
+     "weights": {
+      "cloud": 1.189207115002721,
+      "gym": 1.0,
+      "insurance": 1.0,
+      "mobile": 1.189207115002721,
+      "music": 1.189207115002721,
+      "software": 1.189207115002721,
+      "streaming": 1.189207115002721,
+      "none": 0.8408964152537145
+     },
+     "none_threshold": null,
+     "argmax_expected_macro_f1": 0.6438,
+     "expected_macro_f1": 0.6461
+    }
+   }
+  },
+  "selection_label_mix": {
+   "B_E3": {
+    "cloud": 69,
+    "gym": 95,
+    "insurance": 90,
+    "mobile": 66,
+    "music": 69,
+    "software": 62,
+    "streaming": 77,
+    "none": 172
+   },
+   "B_D": {
+    "cloud": 68,
+    "gym": 93,
+    "insurance": 83,
+    "mobile": 69,
+    "music": 65,
+    "software": 76,
+    "streaming": 76,
+    "none": 170
+   },
+   "N": {
+    "cloud": 70,
+    "gym": 92,
+    "insurance": 83,
+    "mobile": 67,
+    "music": 65,
+    "software": 76,
+    "streaming": 74,
+    "none": 173
+   }
+  },
+  "test_label_mix": {
+   "B_E3": {
+    "cloud": 112,
+    "gym": 110,
+    "insurance": 121,
+    "mobile": 122,
+    "music": 94,
+    "software": 95,
+    "streaming": 99,
+    "none": 247
+   },
+   "B_D": {
+    "cloud": 114,
+    "gym": 111,
+    "insurance": 108,
+    "mobile": 121,
+    "music": 96,
+    "software": 112,
+    "streaming": 106,
+    "none": 232
+   },
+   "N": {
+    "cloud": 109,
+    "gym": 106,
+    "insurance": 102,
+    "mobile": 118,
+    "music": 92,
+    "software": 106,
+    "streaming": 97,
+    "none": 270
+   },
+   "hail mary file": {
+    "cloud": 128,
+    "gym": 117,
+    "insurance": 114,
+    "mobile": 126,
+    "music": 95,
+    "software": 104,
+    "streaming": 102,
+    "none": 214
+   }
+  },
+  "test_none": {
+   "N": 270,
+   "B_D": 232,
+   "hail mary file": 214
+  }
+ }
+}
