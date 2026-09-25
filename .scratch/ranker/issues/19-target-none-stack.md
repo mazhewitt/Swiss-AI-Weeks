@@ -44,7 +44,7 @@ Status: ready-for-agent
 
 - [x] `experiments/analysis/none_stack/` (script, frozen predictions, `results.json`)
 - [x] The rehearsal table and the rule applied, recorded here
-- [ ] The final file plus its script, validated with `rf submit --check`
+- [x] The final file plus its script, validated with `rf submit --check` (a clean end-to-end run of the script reproduced it byte for byte, sha256 d0ba3119…; `predictions/` and `results.json` unchanged)
 - [ ] Three critics; blocking findings fixed
 - [x] The sealed holdout is never read
 
