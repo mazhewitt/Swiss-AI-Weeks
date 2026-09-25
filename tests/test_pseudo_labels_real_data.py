@@ -21,11 +21,15 @@ REAL_RAW = REPO / "data" / "raw"
 # (ticket 04: the none share reaches the real one only at 7 payments, where the rule scores 0.78):
 # streams inside the known history almost never stop, but at the real Cutoff many do. Churning a
 # fifth of the Clients at the Shifted Cutoff closes both gaps.
+# Ticket 11 let stray Filler Description payments join a stream on its schedule. That changes the
+# streams the rule and the labeller see, so the figures moved (the choice did not): the real rule
+# macro-F1 0.5331 -> 0.5245, the chosen setting's none share 0.3035 -> 0.3005 and its rule macro-F1
+# 0.5433 -> 0.5402 (fidelity runs 20260924T214629-add1e5 before, 20260925T011208-e56725 after).
 CHOSEN = "min_payments 3, min_payments_before 0, churn 0.2"
 REAL_NONE_SHARE = 0.2985
-REAL_RULE_MACRO_F1 = 0.5331
-PSEUDO_NONE_SHARE = 0.3035
-PSEUDO_RULE_MACRO_F1 = 0.5433
+REAL_RULE_MACRO_F1 = 0.5245
+PSEUDO_NONE_SHARE = 0.3005
+PSEUDO_RULE_MACRO_F1 = 0.5402
 
 
 @pytest.mark.slow

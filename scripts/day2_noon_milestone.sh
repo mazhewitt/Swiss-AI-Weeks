@@ -6,6 +6,10 @@
 # selection set, writes the test submission and validates it. The comparison is written next to
 # the submission as submissions/$NAME.md. Never reads the sealed holdout.
 #
+# The rule is refit with `--param join_strays=false`: the stream detector as it was when this upload was
+# made, before ticket 11 let stray Filler Description payments join a stream on its schedule. So the
+# current code writes the committed submissions/$NAME.csv byte for byte.
+#
 # Run from the repo root, after `uv run rf fetch-data` and `uv run rf split`:
 #     bash scripts/day2_noon_milestone.sh
 set -euo pipefail
@@ -25,7 +29,7 @@ if ! grep -q "winner: $RULES_GATE4 " <<<"$comparison"; then
 fi
 
 # 2. refit the winner on train plus the selection set, 3. write and validate the submission
-uv run rf train --model rules --none-gate --with-selection
+uv run rf train --model rules --none-gate --with-selection --param join_strays=false
 uv run rf submit --model rules --name "$NAME"
 uv run rf submit --check "submissions/$NAME.csv"
 
@@ -42,7 +46,7 @@ Made by \`bash scripts/day2_noon_milestone.sh\`, which runs:
 
     uv run rf compare --run $RULES_GATE4 --run $RANKER --run $RANKER_PSEUDO \\
         --out submissions/$NAME.md --title "Day-2 12:00 milestone: candidate comparison"
-    uv run rf train --model rules --none-gate --with-selection
+    uv run rf train --model rules --none-gate --with-selection --param join_strays=false
     uv run rf submit --model rules --name $NAME
     uv run rf submit --check submissions/$NAME.csv
 

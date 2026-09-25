@@ -18,14 +18,14 @@ uv run rf submit --model prior --name milestone1-all-none
 uv run rf submit --check submissions/milestone1-all-none.csv
 ```
 
-The milestone-2 submission is the gated rule, reproduced exactly by:
+The milestone-2 submission is the gated rule, reproduced exactly by (`join_strays=false`: the stream detector before ticket 11, which lets stray Filler Description payments join a stream on schedule):
 
 ```sh
-uv run rf train --model rules --none-gate
+uv run rf train --model rules --none-gate --param join_strays=false
 uv run rf submit --model rules --name milestone2_rules_none_gate_v2
 ```
 
-The Day-2 12:00 milestone submission is made by `bash scripts/day2_noon_milestone.sh`: `rf compare` over the rule, ranker and ranker-with-Pseudo-Labels runs on the selection set found a three-way tie, so the simplest candidate, the gated rule, was refit on train plus the selection set (`submissions/day2_noon_rules_gate4.csv`, with the comparison beside it in `day2_noon_rules_gate4.md`).
+The Day-2 12:00 milestone submission is made by `bash scripts/day2_noon_milestone.sh` (it refits the rule with `--param join_strays=false`, the detector it was made with): `rf compare` over the rule, ranker and ranker-with-Pseudo-Labels runs on the selection set found a three-way tie, so the simplest candidate, the gated rule, was refit on train plus the selection set (`submissions/day2_noon_rules_gate4.csv`, with the comparison beside it in `day2_noon_rules_gate4.md`).
 
 - `streams --split valid` detects (or loads cached) Recurring Streams and prints a per-family summary. `--param NAME=VALUE` (repeatable) overrides one stream detection parameter, e.g. `--param amount_tolerance=0.08`. Each parameter set is cached separately under `artifacts/streams/`, and a change to the detector code, family table or raw data rebuilds.
 - `pseudo-labels --split <split> --cutoff <date>` writes each Client's Pseudo-Label at a Shifted Cutoff (default 2025-10-03, the latest whose 90-day Horizon is fully observed) to `artifacts/pseudo_labels/<split>-<cutoff>-min<N>.csv` (`client_id, cutoff_date, target_next_recurring_merchant`, like a label file) and prints the per-label counts and shares. It works for every split, valid and test included, because it reads transactions only: any label read while it runs is refused. `--min-payments N` is the payments a Recurring Stream needs for its Horizon payment to count (default 4, chosen by the fidelity check); `--param NAME=VALUE` overrides the labeller's stream detection. Tables are cached under `artifacts/pseudo_labels/cache/` by split, Shifted Cutoff, detector version and labeller parameters.

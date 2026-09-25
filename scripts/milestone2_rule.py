@@ -5,10 +5,11 @@ payment falls inside the Horizon, and predict the family of the soonest one.
 If the Client's longest such stream has `max_last_n` or fewer payments, or no
 stream qualifies, predict `none`.
 
-Train macro-F1 with max_last_n=4: 0.5331.
+Train macro-F1 with max_last_n=4: 0.5331, on the stream detector before ticket 11 (`join_strays=False`,
+which this script uses; with stray payments joining streams it is 0.5245).
 
 Superseded by the CLI, which reproduces the committed submission exactly:
-    uv run rf train --model rules --none-gate
+    uv run rf train --model rules --none-gate --param join_strays=false
     uv run rf submit --model rules --name milestone2_rules_none_gate_v2
 
 Usage (from the repo root):
@@ -23,7 +24,7 @@ from sklearn.metrics import f1_score
 
 from recurring_family import data
 from recurring_family.config import CUTOFF, LABELS
-from recurring_family.streams import cached_streams
+from recurring_family.streams import StreamParams, cached_streams
 
 RAW = Path("data/raw")
 CACHE = Path("artifacts/streams")
@@ -32,7 +33,7 @@ MAX_LAST_N = 4
 
 
 def predict(split, clients, min_n=3, max_last_n=MAX_LAST_N):
-    streams, _ = cached_streams(RAW, split, CACHE)
+    streams, _ = cached_streams(RAW, split, CACHE, params=StreamParams(join_strays=False))
     live = streams[streams.active & (streams.n_payments >= min_n)].copy()
     live["days_to_next"] = (live.next_payment - CUTOFF).dt.total_seconds() / 86400
     live = live[live.days_to_next <= HORIZON_DAYS]
