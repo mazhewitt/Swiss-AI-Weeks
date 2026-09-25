@@ -758,6 +758,116 @@ def test_a_stream_mostly_paid_on_a_stray_mcc_reports_that_mcc():
     assert s.family_description_share == 1.0
 
 
+# --- stray payments on a stream's schedule -----------------------------------------
+# In valid and test many stream payments carry a Filler Description on another family's home MCC or on
+# no home MCC at all. Such a payment joins a stream whose amount and schedule it fits.
+
+
+def test_a_stream_whose_payments_partly_carry_filler_descriptions_on_other_mccs_is_detected_whole():
+    rows = series("C1", "phone contract", "4814", 47, "2025-03-05", 10)
+    rows[2].update(description="subscription charge", mcc="5734")  # software's home MCC
+    rows[5].update(description="member plan", mcc="5411", timestamp=rows[5]["timestamp"] + 2 * DAY)  # no home MCC
+    rows[8].update(description="digital service", mcc="5812")  # the last two payments
+    rows[9].update(description="member plan", mcc="5411")
+    s = one(detect_streams(frame(rows)))
+    assert (s.family, s.n_payments, s.last_payment, s.active) == ("mobile", 10, rows[9]["timestamp"], True)
+
+    # before, they fell out: the stream missed payments and looked ended
+    anchored = one(detect_streams(frame([r for r in rows if r["description"] == "phone contract"])))
+    assert (anchored.n_payments, anchored.active) == (6, False)
+
+
+def _joins(description, mcc, amount, when, params=StreamParams()):
+    """How many payments one extra payment adds to a monthly mobile stream (2025-04-05 to 2025-11-01)
+    that missed its 2025-08-03 payment."""
+    rows = series("C1", "phone contract", "4814", 47, "2025-04-05", 8)
+    del rows[4]
+    before = one(detect_streams(frame(rows), params=params))
+    after = one(detect_streams(frame(rows + [tx("C1", when, amount, description, mcc)]), params=params))
+    return after.n_payments - before.n_payments
+
+
+@pytest.mark.parametrize(
+    "description, mcc, amount, when",
+    [
+        ("subscription charge", "5734", 47, "2025-08-03"),  # on another family's home MCC
+        ("member plan", "5411", 47, "2025-08-05"),  # on no home MCC, two days late
+        ("premium plan", "7997", 47, "2025-08-03"),  # an ambiguous description no family of it fits
+        ("member plan", "5411", 47 * np.exp(0.9 * TOLERANCE), "2025-08-03"),
+        ("digital service", "5812", 47, "2025-12-01"),  # one period after the last payment
+        ("member plan", "5411", 47, "2025-03-06"),  # one period before the first
+    ],
+)
+def test_a_filler_payment_on_another_mcc_joins_a_stream_whose_amount_and_schedule_it_fits(description, mcc, amount, when):
+    assert _joins(description, mcc, amount, when) == 1
+
+
+@pytest.mark.parametrize(
+    "description, mcc, amount, when",
+    [
+        ("member plan", "5411", 47 * np.exp(1.1 * TOLERANCE), "2025-08-03"),  # another amount
+        ("member plan", "5411", 30, "2025-08-03"),
+        ("member plan", "5411", 47, "2025-08-10"),  # off the schedule
+        ("member plan", "5411", 47, "2025-07-06"),  # beside a payment it would duplicate
+        ("member plan", "5411", 47, "2025-12-31"),  # two periods after the last payment
+        ("merchant charge", "5411", 47, "2025-08-03"),  # Decoy Transactions
+        ("digital order", "5734", 47, "2025-08-03"),
+        ("service payment", "4814", 47, "2025-08-03"),
+        ("grocery store", "5411", 47, "2025-08-03"),  # a shop payment
+        ("service fee", "6012", 47, "2025-08-03"),  # a fee
+        ("gym membership", "5411", 47, "2025-08-03"),  # it names another family
+    ],
+)
+def test_a_payment_at_another_amount_off_the_schedule_or_that_is_no_filler_never_joins(description, mcc, amount, when):
+    assert _joins(description, mcc, amount, when) == 0
+
+
+def test_the_schedule_tolerance_is_a_parameter():
+    assert _joins("member plan", "5411", 47, "2025-08-05") == 1
+    assert _joins("member plan", "5411", 47, "2025-08-05", StreamParams(schedule_tolerance_days=1.0)) == 0
+
+
+def test_joining_stray_payments_can_be_switched_off_for_the_detector_before_ticket_11():
+    assert _joins("subscription charge", "5734", 47, "2025-08-03", StreamParams(join_strays=False)) == 0
+    rows = series("C1", "phone contract", "4814", 47, "2025-03-05", 10)
+    rows[2].update(description="subscription charge", mcc="5734")
+    s = one(detect_streams(frame(rows), params=StreamParams(join_strays=False)))
+    assert s.n_payments == 9
+
+
+def test_a_stream_with_a_period_under_the_floor_takes_no_stray_payments():
+    # two anchored payments three days apart, then a stray every three days: without the floor they
+    # would chain onto the stream one period at a time
+    rows = series("C1", "phone contract", "4814", 47, "2025-06-01", 2, every_days=3)
+    rows += series("C1", "member plan", "5411", 47, "2025-06-07", 12, every_days=3)
+    s = one(detect_streams(frame(rows)))
+    assert s.n_payments == 2
+    assert one(detect_streams(frame(rows), params=StreamParams(stray_min_period_days=2.0))).n_payments == 14
+
+    # a biweekly stream is above the floor and still takes a stray payment
+    rows = series("C2", "audio streaming", "5812", 13.5, "2025-06-05", 8, every_days=14)
+    del rows[3]
+    rows += [tx("C2", "2025-07-17", 13.5, "member plan", "5411")]
+    assert one(detect_streams(frame(rows))).n_payments == 8
+
+
+def test_stray_payments_never_start_a_stream_nor_join_one_without_a_schedule():
+    rows = series("C1", "member plan", "5411", 47, "2025-04-05", 8)
+    rows += series("C1", "subscription charge", "5734", 25, "2025-04-07", 8)
+    assert detect_streams(frame(rows)).empty
+    # a stream of one payment has no period, so no schedule to join
+    s = one(detect_streams(frame(rows + [tx("C1", "2025-09-02", 47, "phone contract", "4814")])))
+    assert (s.family, s.n_payments) == ("mobile", 1)
+
+
+def test_a_series_of_stray_payments_at_another_amount_stays_out_of_a_stream():
+    stream = series("C1", "phone contract", "4814", 47, "2025-04-05", 8)
+    hidden = series("C1", "member plan", "5411", 36, "2025-04-05", 8)
+    hidden += series("C1", "digital service", "5812", 60, "2025-04-05", 8)
+    s = one(detect_streams(frame(stream + hidden)))
+    assert (s.n_payments, s.median_amount) == (8, 47)
+
+
 # --- Pseudo-Labels at a Shifted Cutoff -------------------------------------------
 #
 # The default Shifted Cutoff is 2025-10-03: its Horizon runs to 2025-12-31, the last observed day.

@@ -42,7 +42,8 @@ def test_e1_macro_f1_on_the_valid_selection_set_is_near_the_reference(tmp_path):
 @pytest.mark.slow
 def test_gated_rules_reproduce_the_milestone2_submission(tmp_path):
     root = scratch_project(tmp_path)
-    assert main(["train", "--model", "rules", "--none-gate", *root]) == 0
+    # the submission was made before ticket 11 let stray payments join streams: switch that off
+    assert main(["train", "--model", "rules", "--none-gate", "--param", "join_strays=false", *root]) == 0
     assert main(["submit", "--model", "rules", "--name", "m2", *root]) == 0
 
     new = pd.read_csv(tmp_path / "submissions" / "m2.csv", dtype=str, keep_default_na=False)

@@ -10,3 +10,7 @@ Decoy Transactions appear about 0.16 times per Client in train, 3.1 in valid, 4.
 ## Consequences
 
 A detector test must show that stream output is unchanged when Decoy Transactions are injected into a history. Any new feature that reads transactions directly needs to justify itself against this ADR.
+
+## Amendment (ticket 11): Stray Payments
+
+A Stray Payment can now join an existing stream when its amount fits the stream's amount cluster and its date fits the stream's schedule. A Stray Payment is a payment whose description names no Merchant Family, such as a Filler Description on another family's home MCC or on no home MCC. Valid and test book many stream payments this way, and without the join their streams showed missed payments that train's streams did not. A Stray Payment never starts a stream. Decoy Transactions, shop payments and fees are still dropped before any join, so the guarantee of this ADR holds: the Decoy-injection tests pass unchanged. `StreamParams(join_strays=False)` restores the earlier detector, which the committed milestone submissions were made with.

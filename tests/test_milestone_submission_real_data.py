@@ -32,11 +32,15 @@ def test_day2_noon_submission_is_valid_and_has_its_comparison_beside_it(tmp_path
     assert set(sub["predicted_next_recurring_merchant"]) <= LABELS
     text = COMPARISON.read_text()
     assert "Winner:" in text and "95% interval" in text and "day2_noon_milestone.sh" in text
+    assert "--param join_strays=false" in Path(REPO / "scripts" / "day2_noon_milestone.sh").read_text()
 
 
 @pytest.mark.slow
 def test_day2_noon_submission_is_reproduced_by_its_committed_commands(tmp_path):
     root = scratch_project(tmp_path)
-    assert main(["train", "--model", "rules", "--none-gate", "--with-selection", *root]) == 0
+    # the submission was made before ticket 11 let stray payments join streams: switch that off, as the
+    # script does
+    stream_detector = ["--param", "join_strays=false"]
+    assert main(["train", "--model", "rules", "--none-gate", "--with-selection", *stream_detector, *root]) == 0
     assert main(["submit", "--model", "rules", "--name", NAME, *root]) == 0
     assert (tmp_path / "submissions" / f"{NAME}.csv").read_bytes() == SUBMISSION.read_bytes()

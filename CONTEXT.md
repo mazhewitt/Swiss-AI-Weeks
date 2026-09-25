@@ -55,3 +55,7 @@ _Avoid_: Noise, fake transaction
 **Filler Description**:
 A generic description (e.g. "member plan", "subscription charge") that appears on a payment inside a real Recurring Stream and takes that stream's Merchant Family.
 _Avoid_: Generic description (ambiguous with Decoy Transaction)
+
+**Stray Payment**:
+A card payment with a description that names no Merchant Family (a Filler Description, or an ambiguous one such as "monthly plan") that no stream of its family fits, often because it was booked on another family's home MCC or on no home MCC. It joins an existing Recurring Stream whose amount and schedule it fits, and never starts one.
+_Avoid_: Orphan payment, hidden payment (a "hidden series" is a run of such payments that fits no stream)

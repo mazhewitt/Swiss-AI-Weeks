@@ -30,13 +30,15 @@ Our entry for the 2026 challenge (`hackathons/2026/challenge.md`). Glossary: `CO
 | `195225-27531a` | blend of the rule and the ranker | 0.573 | tie |
 | `215400-3a4f12` | + Pseudo-Labels with churn (fidelity check passes) | 0.567 | tie |
 | `225229-cc7243` | + Client-level `none` model | 0.576 | tie |
+| `001614-c904bc` | ranker + Pseudo-Labels, Stray Payments join streams (ticket 11) | 0.577 | tie |
+| `001755-e309a3` | ranker + `none` model + Pseudo-Labels, Stray Payments join streams (ticket 11) | 0.587 | tie |
 
 ## What we learned
 
 - **Choosing among live streams is limited by timing jitter.** When a Client has several live streams, the soonest projected payment is right 60% of the time, and every other ordering is at chance. Ticket 06's error analysis showed this, and the blend of rule and ranker (ticket 07) added nothing.
 - **`none` is the main lever.** Setting every live-stream truth-`none` Client to `none` would lift train macro-F1 from 0.58 to 0.69. Classic churn signals (an overdue stream, a missed or late last payment, a final refund) are near chance. A Client-level model on per-Client stream aggregates lifts the `none` AUC from 0.69 to 0.88 (`experiments/analysis/churn/`).
 - **Pseudo-Labels can't teach `none`.** Inside the history only 3–5% of live streams stop within 90 days, but at the real Cutoff 23% of live-stream Clients are `none`. A Pseudo-Labeller with uniform churn passes the fidelity check, but it is label noise, not signal (ticket 08).
-- **Train gains shrink on valid and test because the stream features drift.** Filler Descriptions are far more common in valid and test, and they break streams apart. `max_missed_rate` averages 0.07 in train, 0.13 in valid and 0.17 in test. The `none` model's +0.040 on train became +0.003 on selection. Ticket 11 goes after the cause.
+- **Train gains shrink on valid and test because the stream features drift.** Filler Descriptions are far more common in valid and test, and they break streams apart. `max_missed_rate` averages 0.07 in train, 0.13 in valid and 0.17 in test. The `none` model's +0.040 on train became +0.003 on selection. Most missing payments are Filler Descriptions booked on another family's home MCC, and in train they mark `none` Clients (92.5% of train Clients with such a payment on a stream's schedule are `none`). So the `none` model learned an artefact of train. Ticket 11 lets these Stray Payments join a stream on its schedule. That cuts the train-vs-test classifier AUC on the `none` model's features from 0.81 to 0.73, and `max_missed_rate` in test from 0.167 to 0.089. The ranker with the `none` model then scores 0.587 on selection, the best so far (+0.011 over the old detector: a tie).
 
 ## Setup
 
@@ -54,14 +56,14 @@ uv run rf submit --model prior --name milestone1-all-none
 uv run rf submit --check submissions/milestone1-all-none.csv
 ```
 
-The milestone-2 submission is the gated rule, reproduced exactly by:
+The milestone-2 submission is the gated rule, reproduced exactly by (`join_strays=false`: the stream detector before ticket 11, which lets stray Filler Description payments join a stream on schedule):
 
 ```sh
-uv run rf train --model rules --none-gate
+uv run rf train --model rules --none-gate --param join_strays=false
 uv run rf submit --model rules --name milestone2_rules_none_gate_v2
 ```
 
-For the Day-2 12:00 milestone, `rf compare` found a three-way tie between the rule, the ranker and the ranker with Pseudo-Labels on the selection set (`bash scripts/day2_noon_milestone.sh`, `submissions/day2_noon_rules_gate4.md`). That rule's test predictions are the milestone-2 file, and the final rank takes the best of all milestones. So the upload is the highest-scoring candidate instead, the ranker with Pseudo-Labels, refit on train plus the selection set: `bash scripts/day2_noon_ranker_pseudo.sh` writes `submissions/day2_noon_ranker_pseudo.csv`.
+For the Day-2 12:00 milestone, `rf compare` found a three-way tie between the rule, the ranker and the ranker with Pseudo-Labels on the selection set (`bash scripts/day2_noon_milestone.sh`, `submissions/day2_noon_rules_gate4.md`; it refits the rule with `--param join_strays=false`, the detector it was made with). That rule's test predictions are the milestone-2 file, and the final rank takes the best of all milestones. So the upload is the highest-scoring candidate instead, the ranker with Pseudo-Labels, refit on train plus the selection set: `bash scripts/day2_noon_ranker_pseudo.sh` writes `submissions/day2_noon_ranker_pseudo.csv`. It reproduces that file byte for byte at commit `82f79d3`. Ticket 11's detector gives a slightly different file (92% agreement), and the ranker takes no `--param`.
 
 - `streams --split valid` detects (or loads cached) Recurring Streams and prints a per-family summary. `--param NAME=VALUE` (repeatable) overrides one stream detection parameter, e.g. `--param amount_tolerance=0.08`. Each parameter set is cached separately under `artifacts/streams/`, and a change to the detector code, family table or raw data rebuilds.
 - `pseudo-labels --split <split> --cutoff <date>` writes each Client's Pseudo-Label at a Shifted Cutoff (default 2025-10-03, the latest whose 90-day Horizon is fully observed) to `artifacts/pseudo_labels/<split>-<cutoff>-min<N>.csv` (`client_id, cutoff_date, target_next_recurring_merchant`, like a label file) and prints the per-label counts and shares. It works for every split, valid and test included, because it reads transactions only: any label read while it runs is refused. `--min-payments N` is the payments a Recurring Stream needs for its Horizon payment to count (default 4, chosen by the fidelity check); `--param NAME=VALUE` overrides the labeller's stream detection. Tables are cached under `artifacts/pseudo_labels/cache/` by split, Shifted Cutoff, detector version and labeller parameters.

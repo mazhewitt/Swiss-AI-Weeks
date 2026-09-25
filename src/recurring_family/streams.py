@@ -10,6 +10,11 @@ Merchant Family evidence from its description and MCC:
 - a *Filler Description* ("member plan", "subscription charge", ...) names none. It never
   starts a stream but joins one whose amount and MCC it fits.
 
+A payment whose description names no family and that none of the above placed (a Filler Description
+on another family's home MCC or on no home MCC, or an ambiguous description no family of it fits) is
+a *stray*: it joins a stream whose amount it fits when its date also fits an empty slot of that
+stream's schedule, and never starts one. Valid and test book many stream payments this way.
+
 Shop descriptions, service fees and Decoy Transactions ("digital order", "merchant charge",
 ...) are dropped. Music and streaming share MCC 5812: a description hint ("audio", "video", ...)
 puts a payment in its family before amount clustering, so two streams at nearby amounts never
@@ -119,6 +124,9 @@ class StreamParams:
     canonical_periods: tuple[float, ...] = (14.0, 30.4)  # biweekly and monthly, in days
     music_streaming_split: float = 15.5  # 5812 streams without a hint: below is music, above streaming
     refund_window_days: float = 7.0  # a refund reverses a payment made at most this many days before it
+    schedule_tolerance_days: float = 3.0  # a stray payment joins a stream within this many days of an empty slot
+    stray_min_period_days: float = 7.0  # only a stream whose period is at least this many days takes stray payments
+    join_strays: bool = True  # False: stray payments join no stream (the detector before ticket 11)
 
 
 # --- per-row evidence ---------------------------------------------------------
@@ -139,7 +147,8 @@ def _family_specific(description: str) -> bool:
 
 
 def _evidence(description: str, mcc: str) -> tuple[str, frozenset[str], str | None]:
-    """(kind, families, hint): kind is 'family', 'ambiguous', 'filler' or 'drop'."""
+    """(kind, families, hint): kind is 'family', 'ambiguous', 'filler', 'stray' (a description that
+    names no family, off every home MCC) or 'drop'."""
     words = set(_words(description))
     if not words or words & _SHOP_WORDS or words & _DECOY_WORDS:
         return "drop", frozenset(), None
@@ -153,7 +162,12 @@ def _evidence(description: str, mcc: str) -> tuple[str, frozenset[str], str | No
         if required <= words:
             return "ambiguous", families, hint
     home = HOME_MCC.get(mcc)
-    return ("filler", frozenset({home}), None) if home else ("drop", frozenset(), None)
+    return ("filler", frozenset({home}), None) if home else ("stray", frozenset(), None)
+
+
+def _names_family(description: str) -> bool:
+    words = set(_words(description))
+    return any(words & keys for keys in _FAMILY_WORDS.values())
 
 
 def _group_choices(families, hint) -> list[set[str]]:
@@ -357,7 +371,22 @@ def _client_streams(client, payments, refunds, cutoff, params):
             home = HOME_MCC.get(mcc[i])
             stream_of[i] = fit(log_amount[i], _group_choices(families[i] | ({home} if home else set()), hints[i]))
 
+    # Stray payments: a description that names no family (a Filler Description or an ambiguous one,
+    # never a shop, fee or Decoy Transaction) left out above, often because a stream's payment was
+    # booked on another family's home MCC or on no home MCC. It joins a stream whose amount it fits
+    # when its date also fits that stream's schedule; it never starts one.
     ns = pd.DatetimeIndex(payments["timestamp"]).as_unit("ns").asi8
+    description = payments["description"].astype(object).to_numpy()
+    stray = [
+        i
+        for i in np.flatnonzero(stream_of < 0)
+        if kind[i] in ("stray", "ambiguous") or (kind[i] == "filler" and not _names_family(description[i]))
+    ]
+    if stray and params.join_strays:
+        stray.sort(key=lambda i: (ns[i], log_amount[i], str(description[i]), str(mcc[i])))  # never row order
+        ranges = [None if g is None else (lo, hi) for g, lo, hi in streams]
+        _join_on_schedule(stray, stream_of, ranges, ns / pd.Timedelta(days=1).value, log_amount, params)
+
     refund_counts, reversed_ = _match_refunds(refunds, stream_of, [g for g, _, _ in streams], ns, log_amount, params)
 
     times = payments["timestamp"].to_numpy()
@@ -407,7 +436,7 @@ def _match_refunds(
     refund_ns = pd.DatetimeIndex(refunds["timestamp"]).as_unit("ns").asi8
     for t, d, m, a in zip(refund_ns, refunds["description"], refunds["mcc"], refunds["amount"]):
         k, fams, hint = _evidence(d, m)
-        if k == "drop":
+        if k in ("drop", "stray"):
             continue
         gap = np.abs(log_amount - math.log(max(float(a), 1e-9)))
         reversible = ~refunded & (payment_ns <= t) & (payment_ns >= t - window) & (gap <= params.amount_tolerance)
@@ -419,6 +448,50 @@ def _match_refunds(
                 counts[stream_of[i]] += 1
                 break
     return counts, reversed_
+
+
+def _join_on_schedule(stray, stream_of, ranges, days, log_amount, params) -> None:
+    """Stray payments (indices `stray`, in time order) join streams in place (`stream_of`). A payment
+    joins a stream of at least two payments and a period of at least `stray_min_period_days` when its
+    amount fits the stream's amount range (`ranges`, None for a stream merged away) and its date fits
+    an empty slot of the stream's schedule: within the schedule tolerance of a whole number of periods
+    from one of its payments, at least half a period from all of them and at most one period before
+    its first or after its last. Of several streams, the nearest slot wins, then the nearest amount.
+    Passes repeat until none joins, so a run of stray payments can extend a stream one period at a
+    time. The period floor keeps a stream with a few days' period from chaining up strays."""
+    tolerance = params.schedule_tolerance_days
+    while True:
+        slots = {}
+        for s, fitted in enumerate(ranges):
+            times = np.sort(days[stream_of == s]) if fitted is not None else np.zeros(0)
+            period = _period(np.diff(times), params) if len(times) >= 2 else np.nan
+            if period >= params.stray_min_period_days:
+                slots[s] = (times, period)
+        joined = False
+        for i in stray:
+            if stream_of[i] >= 0:
+                continue
+            best = None
+            for s, (times, period) in slots.items():
+                lo, hi = ranges[s]
+                gap = max(lo - log_amount[i], log_amount[i] - hi, 0.0)
+                apart = days[i] - times
+                if (
+                    gap > params.amount_tolerance
+                    or np.abs(apart).min() < period / 2
+                    or not times[0] - period - tolerance <= days[i] <= times[-1] + period + tolerance
+                ):
+                    continue
+                off = float(np.abs(apart - np.round(apart / period) * period).min())
+                if off <= tolerance and (best is None or (off, gap) < best[:2]):
+                    best = (off, gap, s)
+            if best is not None:
+                s = best[2]
+                stream_of[i] = s
+                slots[s] = (np.sort(np.append(slots[s][0], days[i])), slots[s][1])
+                joined = True
+        if not joined:
+            return
 
 
 def _split_music_streaming(hints, amounts, params) -> str:
