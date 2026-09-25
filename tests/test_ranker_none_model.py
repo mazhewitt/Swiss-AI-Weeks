@@ -260,22 +260,14 @@ def test_decoys_and_unmatched_refunds_leave_the_none_model_features_and_probabil
 
 def with_decoys(project, split):
     """The split's transactions plus, for every Client, Decoy Transactions on stream MCCs at stream
-    amounts, a refund with a decoy description at a stream amount and a refund of a shop payment.
-    The Decoys sit half a period off the Client's monthly stream (ticket 12: a Decoy-described payment
-    on an empty slot of a stream's schedule at its amount joins it); a Client with no stream gets them
-    on fixed days."""
+    amounts, a refund with a decoy description at a stream amount and a refund of a shop payment."""
     rows = [json.loads(line) for line in (project.raw / SPLIT_FILES[split]).read_text().splitlines()]
-    last = {}  # each Client's last stream payment
-    for r in rows:
-        if r["description"] != shop(r["client_id"])[0]["description"]:
-            last[r["client_id"]] = max(pd.Timestamp(r["timestamp"]), last.get(r["client_id"], pd.Timestamp(r["timestamp"])))
     extra = []
     for client in sorted({r["client_id"] for r in rows}):
         for i, (description, mcc, amount) in enumerate(
             [("digital order", "5732", 6.8), ("merchant charge", "7997", 66.0), ("card purchase", "6300", 109.0)]
         ):
-            start = last[client] - (15 + 30 * (i + 1)) * DAY if client in last else pd.Timestamp(f"2025-{8 + i:02d}-14")
-            extra += series(client, description, mcc, amount, start, 3, every_days=-30 if client in last else 31)
+            extra += series(client, description, mcc, amount, f"2025-{8 + i:02d}-14", 3, every_days=31)
         refund = series(client, "digital order", "7997", 66.0, "2025-12-20", 1)[0]
         extra.append({**refund, "type": "refund", "direction": "in"})
         extra.append({**shop(client, "2025-12-21")[0], "type": "refund", "direction": "in"})

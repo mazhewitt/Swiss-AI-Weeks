@@ -116,7 +116,7 @@ What changed:
 - With the defaults, the stream table and member payments of train, valid, test and unlabeled have the same hashes as at `8623d2e` (checked).
 - The slow fidelity test is pinned to the ticket-11 figures again (0.5245 / 0.3005 / 0.5402).
 - The `join_decoys` unit tests pass the flag explicitly and stay.
-- The changed `with_decoys` in `tests/test_ranker_none_model.py` stays: it passes, and it fails on a mutant that feeds the `none` model a raw transaction count.
+- `with_decoys` in `tests/test_ranker_none_model.py` is restored to its ticket-11 form: Decoys on the stream's schedule at its amount. The review found that the changed helper (Decoys half a period off the schedule) no longer reached the join path, so a mutant that joins Decoys by default survived it. With the default off, the original helper passes, and it fails when `join_decoys` is on.
 - The v3 script's header says it reproduces `submissions/day2_final_ranker_none_v3.csv` only at `73ec6a5`.
 - ADR 0001 records the figures, the gate and this decision.
 

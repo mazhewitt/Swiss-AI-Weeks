@@ -19,6 +19,9 @@ set -euo pipefail
 
 NAME=day2_final_ranker_none_v3
 
+# refuse to run where join_decoys is off: that would overwrite the v3 file with v2's predictions
+uv run python -c "import sys; from recurring_family.streams import StreamParams; sys.exit(0 if StreamParams().join_decoys else 'join_decoys is off at this commit: run this script at commit 73ec6a5')"
+
 uv run rf train --model ranker --none-model --with-selection --decision tuned \
     --pseudo train:2025-10-03 --pseudo unlabeled:2025-10-03 \
     --pseudo-weight 0.5 --pseudo-min-payments 4
