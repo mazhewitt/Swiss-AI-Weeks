@@ -1,0 +1,359 @@
+{
+ "design": {
+  "clients": "700 selection Clients",
+  "cv": "5 repeats x 5-fold stratified, seeds 0-4, oof averaged",
+  "params": {
+   "n_estimators": 200,
+   "learning_rate": 0.03,
+   "num_leaves": 7,
+   "min_child_samples": 30,
+   "subsample": 0.8,
+   "subsample_freq": 1,
+   "colsample_bytree": 0.7,
+   "random_state": 0,
+   "deterministic": true,
+   "force_row_wise": true,
+   "n_jobs": 1
+  },
+  "gate": "raw AUC >= 0.7 and CI excludes 0.5"
+ },
+ "n": {
+  "clients": 700,
+  "none": 205,
+  "family": 495
+ },
+ "n_features": {
+  "base": 104,
+  "raw": 130
+ },
+ "base_clients_without_streams": 31,
+ "raw": {
+  "auc": 0.8073,
+  "ci95": [
+   0.7717,
+   0.8429
+  ],
+  "se": 0.0182,
+  "p_vs_0.5": 2.6360809148650488e-64,
+  "per_repeat_auc": [
+   0.8097,
+   0.79,
+   0.8024,
+   0.7935,
+   0.8003
+  ],
+  "top_gain": {
+   "decoy_share_of_card": 33077.0,
+   "type_share_refund": 8398.0,
+   "n_desc": 6339.0,
+   "refund_type_gap_median": 6317.0,
+   "refund_type_first_days": 6063.0,
+   "refund_type_share_of_card": 5851.0,
+   "last_family_named_days": 5316.0,
+   "decoy_rate90_minus_before": 4285.0,
+   "cur_entropy": 4057.0,
+   "refund_type_amount_mean": 3975.0,
+   "card_amount_max": 3695.0,
+   "last_refund_days": 3573.0,
+   "fee_sum": 3230.0,
+   "n_decoy_90": 2979.0,
+   "hour_share_night": 2857.0
+  }
+ },
+ "base": {
+  "auc": 0.8214,
+  "ci95": [
+   0.7866,
+   0.8562
+  ],
+  "se": 0.0178,
+  "p_vs_0.5": 2.814427980230294e-73,
+  "per_repeat_auc": [
+   0.8238,
+   0.8131,
+   0.815,
+   0.813,
+   0.8115
+  ],
+  "top_gain": {
+   "stream_activity_ratio60": 16244.0,
+   "stream_last_days": 14938.0,
+   "min_n_payments": 12226.0,
+   "stream_first_days": 10560.0,
+   "max_n_payments": 7017.0,
+   "max_expected_minus_actual": 6807.0,
+   "min_gap_recent_minus_all": 5197.0,
+   "soonest_gap_trend": 4724.0,
+   "min_gap_trend": 4102.0,
+   "min_days_since_first": 4019.0,
+   "soonest_n_payments": 3360.0,
+   "max_last_gap_late": 3311.0,
+   "max_amount_cv": 3257.0,
+   "stream_activity_ratio90": 3190.0,
+   "min_expected_minus_actual": 3100.0
+  }
+ },
+ "base+raw": {
+  "auc": 0.8733,
+  "ci95": [
+   0.8446,
+   0.9021
+  ],
+  "se": 0.0147,
+  "p_vs_0.5": 1.0165871269948024e-142,
+  "per_repeat_auc": [
+   0.8794,
+   0.8677,
+   0.8695,
+   0.8609,
+   0.8538
+  ],
+  "top_gain": {
+   "stream_last_days": 13685.0,
+   "stream_activity_ratio60": 12458.0,
+   "min_n_payments": 10705.0,
+   "decoy_share_of_card": 10570.0,
+   "refund_type_gap_median": 8210.0,
+   "max_n_payments": 7234.0,
+   "type_share_refund": 7057.0,
+   "max_expected_minus_actual": 5100.0,
+   "soonest_gap_trend": 4541.0,
+   "refund_type_share_of_card": 4345.0,
+   "n_decoy_90": 3921.0,
+   "max_n_refunds": 3818.0,
+   "refund_type_amount_mean": 3790.0,
+   "refund_type_first_days": 3769.0,
+   "min_gap_recent_minus_all": 3542.0
+  }
+ },
+ "paired_delong_base+raw_vs_base": {
+  "auc_new": 0.8733,
+  "auc_old": 0.8214,
+  "diff": 0.0519,
+  "ci95": [
+   0.0243,
+   0.0795
+  ],
+  "z": 3.689,
+  "p_two_sided": 0.00022501785490854998
+ },
+ "raw_top10_single_feature": {
+  "decoy_share_of_card": {
+   "auc": 0.7636,
+   "direction": "high -> none",
+   "mean_none": 0.336,
+   "mean_family": 0.248
+  },
+  "type_share_refund": {
+   "auc": 0.666,
+   "direction": "high -> none",
+   "mean_none": 0.068,
+   "mean_family": 0.046
+  },
+  "n_desc": {
+   "auc": 0.6834,
+   "direction": "low -> none",
+   "mean_none": 29.722,
+   "mean_family": 34.646
+  },
+  "refund_type_gap_median": {
+   "auc": 0.5974,
+   "direction": "low -> none",
+   "mean_none": 55.341,
+   "mean_family": 65.658
+  },
+  "refund_type_first_days": {
+   "auc": 0.5545,
+   "direction": "low -> none",
+   "mean_none": 259.479,
+   "mean_family": 279.638
+  },
+  "refund_type_share_of_card": {
+   "auc": 0.6673,
+   "direction": "high -> none",
+   "mean_none": 0.113,
+   "mean_family": 0.076
+  },
+  "last_family_named_days": {
+   "auc": 0.6265,
+   "direction": "high -> none",
+   "mean_none": 40.995,
+   "mean_family": 23.888
+  },
+  "decoy_rate90_minus_before": {
+   "auc": 0.6182,
+   "direction": "high -> none",
+   "mean_none": 0.013,
+   "mean_family": 0.003
+  },
+  "cur_entropy": {
+   "auc": 0.5499,
+   "direction": "low -> none",
+   "mean_none": 0.374,
+   "mean_family": 0.417
+  },
+  "refund_type_amount_mean": {
+   "auc": 0.57,
+   "direction": "low -> none",
+   "mean_none": 78.81,
+   "mean_family": 91.549
+  }
+ },
+ "adversarial_top10_raw": {
+  "features": [
+   "decoy_share_of_card",
+   "type_share_refund",
+   "n_desc",
+   "refund_type_gap_median",
+   "refund_type_first_days",
+   "refund_type_share_of_card",
+   "last_family_named_days",
+   "decoy_rate90_minus_before",
+   "cur_entropy",
+   "refund_type_amount_mean"
+  ],
+  "train_vs_test": 0.9998,
+  "selection_vs_test": 0.802,
+  "train_vs_selection": 0.9985
+ },
+ "gate": {
+  "raw_auc": 0.8073,
+  "raw_ci95": [
+   0.7717,
+   0.8429
+  ],
+  "passed": true,
+  "verdict": "recommend a build (Daume / is_target stack) as a new ticket"
+ },
+ "posthoc": {
+  "note": "not pre-registered; context only",
+  "top10_raw_per_feature_drift": {
+   "decoy_share_of_card": {
+    "selection_vs_test": 0.7819,
+    "train_vs_test": 0.9999,
+    "mean_train": 0.0142,
+    "mean_selection": 0.2733,
+    "mean_test": 0.3942
+   },
+   "type_share_refund": {
+    "selection_vs_test": 0.5208,
+    "train_vs_test": 0.5249,
+    "mean_train": 0.0531,
+    "mean_selection": 0.0527,
+    "mean_test": 0.0507
+   },
+   "n_desc": {
+    "selection_vs_test": 0.5568,
+    "train_vs_test": 0.7451,
+    "mean_train": 25.36,
+    "mean_selection": 33.2043,
+    "mean_test": 31.531
+   },
+   "refund_type_gap_median": {
+    "selection_vs_test": 0.5051,
+    "train_vs_test": 0.5093,
+    "mean_train": 70.6339,
+    "mean_selection": 69.0283,
+    "mean_test": 69.1722
+   },
+   "refund_type_first_days": {
+    "selection_vs_test": 0.5175,
+    "train_vs_test": 0.512,
+    "mean_train": 269.3052,
+    "mean_selection": 271.8822,
+    "mean_test": 264.5392
+   },
+   "refund_type_share_of_card": {
+    "selection_vs_test": 0.521,
+    "train_vs_test": 0.5237,
+    "mean_train": 0.0869,
+    "mean_selection": 0.0868,
+    "mean_test": 0.0834
+   },
+   "last_family_named_days": {
+    "selection_vs_test": 0.5448,
+    "train_vs_test": 0.6117,
+    "mean_train": 24.2389,
+    "mean_selection": 28.9307,
+    "mean_test": 34.0276
+   },
+   "decoy_rate90_minus_before": {
+    "selection_vs_test": 0.5261,
+    "train_vs_test": 0.5988,
+    "mean_train": 0.0003,
+    "mean_selection": 0.0063,
+    "mean_test": 0.0092
+   },
+   "cur_entropy": {
+    "selection_vs_test": 0.5013,
+    "train_vs_test": 0.5141,
+    "mean_train": 0.4122,
+    "mean_selection": 0.4047,
+    "mean_test": 0.402
+   },
+   "refund_type_amount_mean": {
+    "selection_vs_test": 0.5046,
+    "train_vs_test": 0.5223,
+    "mean_train": 98.0096,
+    "mean_selection": 89.4246,
+    "mean_test": 90.6085
+   }
+  },
+  "raw_without_decoy_features": {
+   "auc": 0.7623,
+   "ci95": [
+    0.7244,
+    0.8003
+   ],
+   "se": 0.0194,
+   "p_vs_0.5": 7.187222742453461e-42,
+   "dropped": [
+    "n_decoy",
+    "n_decoy_7",
+    "n_decoy_14",
+    "n_decoy_30",
+    "n_decoy_60",
+    "n_decoy_90",
+    "last_decoy_days",
+    "decoy_n",
+    "decoy_share_of_card",
+    "decoy_share90",
+    "decoy_share90_norm",
+    "decoy_rate90_minus_before",
+    "decoy_near_active_n",
+    "decoy_near_active_n90",
+    "decoy_near_active_share"
+   ],
+   "per_repeat_auc": [
+    0.7705,
+    0.7388,
+    0.7612,
+    0.755,
+    0.7347
+   ],
+   "top_gain": {
+    "n_desc": 14366.0,
+    "refund_type_share_of_card": 9534.0,
+    "refund_type_gap_median": 9008.0,
+    "last_family_named_days": 7272.0,
+    "refund_type_first_days": 6917.0,
+    "n_generic": 6600.0,
+    "type_share_refund": 6304.0,
+    "refund_type_amount_mean": 5301.0,
+    "mcc90_5411": 5274.0,
+    "last_refund_days": 4007.0
+   },
+   "paired_vs_raw": {
+    "auc_new": 0.7623,
+    "auc_old": 0.8073,
+    "diff": -0.045,
+    "ci95": [
+     -0.0674,
+     -0.0225
+    ],
+    "z": -3.923,
+    "p_two_sided": 8.740820359354296e-05
+   }
+  }
+ }
+}
