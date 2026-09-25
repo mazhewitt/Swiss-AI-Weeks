@@ -140,13 +140,19 @@ def cmd_split(args, paths: Paths) -> int:
 
 
 def stream_param(text: str) -> tuple[str, object]:
-    """Parse `NAME=VALUE` for one StreamParams field, typed like its default (tuples comma-separated)."""
+    """Parse `NAME=VALUE` for one StreamParams field, typed like its default (tuples comma-separated, booleans
+    true/false, 1/0 or yes/no)."""
     name, sep, value = text.partition("=")
     defaults = {f.name: f.default for f in dataclasses.fields(StreamParams)}
     if not sep or name not in defaults:
         raise argparse.ArgumentTypeError(f"expected NAME=VALUE with NAME one of {', '.join(defaults)}; got {text!r}")
     default = defaults[name]
     try:
+        if isinstance(default, bool):
+            flags = {"true": True, "1": True, "yes": True, "false": False, "0": False, "no": False}
+            if value.strip().lower() not in flags:
+                raise ValueError(value)
+            return name, flags[value.strip().lower()]
         if isinstance(default, tuple):
             return name, tuple(float(v) for v in value.split(","))
         return name, type(default)(value)

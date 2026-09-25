@@ -125,6 +125,8 @@ class StreamParams:
     music_streaming_split: float = 15.5  # 5812 streams without a hint: below is music, above streaming
     refund_window_days: float = 7.0  # a refund reverses a payment made at most this many days before it
     schedule_tolerance_days: float = 3.0  # a stray payment joins a stream within this many days of an empty slot
+    stray_min_period_days: float = 7.0  # only a stream whose period is at least this many days takes stray payments
+    join_strays: bool = True  # False: stray payments join no stream (the detector before ticket 11)
 
 
 # --- per-row evidence ---------------------------------------------------------
@@ -380,7 +382,7 @@ def _client_streams(client, payments, refunds, cutoff, params):
         for i in np.flatnonzero(stream_of < 0)
         if kind[i] in ("stray", "ambiguous") or (kind[i] == "filler" and not _names_family(description[i]))
     ]
-    if stray:
+    if stray and params.join_strays:
         stray.sort(key=lambda i: (ns[i], log_amount[i], str(description[i]), str(mcc[i])))  # never row order
         ranges = [None if g is None else (lo, hi) for g, lo, hi in streams]
         _join_on_schedule(stray, stream_of, ranges, ns / pd.Timedelta(days=1).value, log_amount, params)
@@ -450,19 +452,20 @@ def _match_refunds(
 
 def _join_on_schedule(stray, stream_of, ranges, days, log_amount, params) -> None:
     """Stray payments (indices `stray`, in time order) join streams in place (`stream_of`). A payment
-    joins a stream of at least two payments when its amount fits the stream's amount range (`ranges`,
-    None for a stream merged away) and its date fits an empty slot of the stream's schedule: within
-    the schedule tolerance of a whole number of periods from one of its payments, at least half a
-    period from all of them and at most one period before its first or after its last. Of several
-    streams, the nearest slot wins, then the nearest amount. Passes repeat until none joins, so a run
-    of stray payments can extend a stream one period at a time."""
+    joins a stream of at least two payments and a period of at least `stray_min_period_days` when its
+    amount fits the stream's amount range (`ranges`, None for a stream merged away) and its date fits
+    an empty slot of the stream's schedule: within the schedule tolerance of a whole number of periods
+    from one of its payments, at least half a period from all of them and at most one period before
+    its first or after its last. Of several streams, the nearest slot wins, then the nearest amount.
+    Passes repeat until none joins, so a run of stray payments can extend a stream one period at a
+    time. The period floor keeps a stream with a few days' period from chaining up strays."""
     tolerance = params.schedule_tolerance_days
     while True:
         slots = {}
         for s, fitted in enumerate(ranges):
             times = np.sort(days[stream_of == s]) if fitted is not None else np.zeros(0)
             period = _period(np.diff(times), params) if len(times) >= 2 else np.nan
-            if period > 0:
+            if period >= params.stray_min_period_days:
                 slots[s] = (times, period)
         joined = False
         for i in stray:

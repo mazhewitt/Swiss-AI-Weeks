@@ -827,6 +827,30 @@ def test_the_schedule_tolerance_is_a_parameter():
     assert _joins("member plan", "5411", 47, "2025-08-05", StreamParams(schedule_tolerance_days=1.0)) == 0
 
 
+def test_joining_stray_payments_can_be_switched_off_for_the_detector_before_ticket_11():
+    assert _joins("subscription charge", "5734", 47, "2025-08-03", StreamParams(join_strays=False)) == 0
+    rows = series("C1", "phone contract", "4814", 47, "2025-03-05", 10)
+    rows[2].update(description="subscription charge", mcc="5734")
+    s = one(detect_streams(frame(rows), params=StreamParams(join_strays=False)))
+    assert s.n_payments == 9
+
+
+def test_a_stream_with_a_period_under_the_floor_takes_no_stray_payments():
+    # two anchored payments three days apart, then a stray every three days: without the floor they
+    # would chain onto the stream one period at a time
+    rows = series("C1", "phone contract", "4814", 47, "2025-06-01", 2, every_days=3)
+    rows += series("C1", "member plan", "5411", 47, "2025-06-07", 12, every_days=3)
+    s = one(detect_streams(frame(rows)))
+    assert s.n_payments == 2
+    assert one(detect_streams(frame(rows), params=StreamParams(stray_min_period_days=2.0))).n_payments == 14
+
+    # a biweekly stream is above the floor and still takes a stray payment
+    rows = series("C2", "audio streaming", "5812", 13.5, "2025-06-05", 8, every_days=14)
+    del rows[3]
+    rows += [tx("C2", "2025-07-17", 13.5, "member plan", "5411")]
+    assert one(detect_streams(frame(rows))).n_payments == 8
+
+
 def test_stray_payments_never_start_a_stream_nor_join_one_without_a_schedule():
     rows = series("C1", "member plan", "5411", 47, "2025-04-05", 8)
     rows += series("C1", "subscription charge", "5734", 25, "2025-04-07", 8)
@@ -838,7 +862,8 @@ def test_stray_payments_never_start_a_stream_nor_join_one_without_a_schedule():
 
 def test_a_series_of_stray_payments_at_another_amount_stays_out_of_a_stream():
     stream = series("C1", "phone contract", "4814", 47, "2025-04-05", 8)
-    hidden = series("C1", "member plan", "5411", 36, "2025-04-05", 8) + series("C1", "digital service", "5812", 60, "2025-04-05", 8)
+    hidden = series("C1", "member plan", "5411", 36, "2025-04-05", 8)
+    hidden += series("C1", "digital service", "5812", 60, "2025-04-05", 8)
     s = one(detect_streams(frame(stream + hidden)))
     assert (s.n_payments, s.median_amount) == (8, 47)
 

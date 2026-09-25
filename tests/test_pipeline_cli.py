@@ -1,5 +1,6 @@
 """Seam 1: the pipeline through the CLI against the fixture data folder."""
 
+import argparse
 import csv
 import dataclasses
 import os
@@ -13,6 +14,7 @@ import pytest
 
 from conftest import FIXTURE_DATA
 from recurring_family import streams as stream_detection
+from recurring_family.cli import stream_param
 from recurring_family.streams import StreamParams
 
 EXPECTED_FILES = sorted(p.name for p in FIXTURE_DATA.iterdir())
@@ -292,7 +294,23 @@ CHANGED_PARAMS = {
     "music_streaming_split": "20",
     "refund_window_days": "3",
     "schedule_tolerance_days": "1",
+    "stray_min_period_days": "20",
+    "join_strays": "false",
 }
+
+
+@pytest.mark.parametrize(
+    "text, value",
+    [("join_strays=false", False), ("join_strays=False", False), ("join_strays=0", False), ("join_strays=no", False),
+     ("join_strays=true", True), ("join_strays=1", True), ("join_strays=yes", True)],
+)
+def test_a_boolean_stream_parameter_parses_true_and_false_words(text, value):
+    assert stream_param(text) == ("join_strays", value)
+
+
+def test_a_boolean_stream_parameter_refuses_other_words():
+    with pytest.raises(argparse.ArgumentTypeError):
+        stream_param("join_strays=maybe")
 
 
 def test_every_stream_parameter_is_part_of_the_cache_key(fetched, capsys):
