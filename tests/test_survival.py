@@ -646,3 +646,336 @@ def test_fit_races_by_the_models_order(monkeypatch, order, rows):
     assert model.n_training_rows == rows  # gym's place in the race: every stream up to it trains
     if seen:  # the fit sees next_rank as the place in the race too
         assert seen[0]["next_rank"].tolist() == [float(i + 1) for i in range(rows)]
+
+
+# --- ticket 14: the soft race -----------------------------------------------------------------------
+
+from scipy.stats import norm  # noqa: E402
+
+from recurring_family.survival import (  # noqa: E402
+    JITTER_FLOOR_DAYS,
+    JITTER_MAD_SCALE,
+    JITTER_UNPROJECTED_DAYS,
+    MIN_SOFT_WEIGHT,
+    SOFT_ORDER,
+    _padded,
+    _soft_next,
+    jitter_scale,
+    race_slot,
+    soft_race_proba,
+    soft_training_rows,
+)
+
+
+def soft_proba(t, s, sigma, clients):
+    return soft_race_proba(t, s, race_slot(t, "monthly-slot").to_numpy(), sigma, pd.Index(clients))
+
+
+def test_vanishing_jitter_gives_the_hard_race():
+    t = table(("A", "gym", 3.0, 5), ("A", "music", 9.0, 5), ("A", "cloud", 15.0, 5), ("B", "mobile", 2.0, 4))
+    s = t["stream"].map({0: 0.5, 1: 0.4, 2: 0.2, 3: 0.3}).to_numpy()
+    hard = race_proba(t, s, pd.Index(["A", "B", "C"]))
+    soft = soft_proba(t, s, np.full(len(t), 1e-9), ["A", "B", "C"])
+    pd.testing.assert_frame_equal(soft, hard, atol=1e-12, rtol=0)
+    assert soft.loc["C", "none"] == 1.0
+
+
+def test_two_streams_due_the_same_day_with_the_same_spread_split_the_race_evenly():
+    # each is before the other with probability 1/2: P(1) = s1 (1 - s2/2), P(2) = s2 (1 - s1/2)
+    t = table(("A", "gym", 10.0, 5), ("A", "music", 10.0, 3))
+    s = t["stream"].map({0: 0.6, 1: 0.5}).to_numpy()
+    a = soft_proba(t, s, np.full(2, 4.0), ["A"]).loc["A"]
+    assert a["gym"] == pytest.approx(0.6 * (1 - 0.25), abs=1e-9)
+    assert a["music"] == pytest.approx(0.5 * (1 - 0.3), abs=1e-9)
+    assert a["none"] == pytest.approx(0.4 * 0.5, abs=1e-15)
+    # the hard race would have given gym (more payments, so first) everything it can
+    hard = race_proba(t, s, pd.Index(["A"])).loc["A"]
+    assert hard["gym"] == pytest.approx(0.6) and hard["music"] == pytest.approx(0.2)
+
+
+def test_a_stream_far_ahead_of_another_races_first_whatever_the_jitter():
+    t = table(("A", "gym", 3.0, 5), ("A", "music", 300.0, 5))
+    s = np.array([0.5, 0.4])
+    a = soft_proba(t, s, np.full(2, JITTER_FLOOR_DAYS), ["A"]).loc["A"]
+    assert a["gym"] == pytest.approx(0.5, abs=1e-9) and a["music"] == pytest.approx(0.5 * 0.4, abs=1e-9)
+
+
+def test_the_soft_race_keeps_none_exactly_and_rows_sum_to_one():
+    rng = np.random.default_rng(1)
+    streams = [(f"C{i % 7}", FAMILIES[rng.integers(len(FAMILIES))], float(rng.integers(0, 60)), 3) for i in range(40)]
+    t = table(*streams)
+    clients = [f"C{i}" for i in range(9)]
+    for s in (rng.random(len(t)), np.ones(len(t)), np.zeros(len(t)), rng.random(len(t)) ** 4):
+        sigma = rng.uniform(1.0, 8.0, len(t))
+        soft, hard = soft_proba(t, s, sigma, clients), race_proba(t, s, pd.Index(clients))
+        np.testing.assert_allclose(soft.sum(axis=1), 1.0, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(soft["none"], hard["none"], rtol=0, atol=1e-12)
+        assert ((soft >= 0) & (soft <= 1)).all().all()
+
+
+def test_the_quadrature_puts_one_minus_none_on_the_families_before_any_scaling():
+    rng = np.random.default_rng(2)
+    t = table(*[(f"C{i % 5}", FAMILIES[i % 7], float(rng.integers(0, 40)), 3) for i in range(30)])
+    # spreads as the jitter model gives them: the floor up to about three times it
+    s, mu, sigma = rng.random(len(t)), race_slot(t).to_numpy(), rng.uniform(JITTER_FLOOR_DAYS, 3 * JITTER_FLOOR_DAYS, len(t))
+    _, _, mask, (s_, mu_, sigma_) = _padded(t, s, mu, sigma)
+    p, none = _soft_next(s_, mu_, sigma_, mask)
+    np.testing.assert_allclose(p.sum(axis=1), 1.0 - none, rtol=0, atol=1e-6)
+
+
+def test_the_quadrature_agrees_with_a_seeded_monte_carlo_over_orders():
+    t = table(("A", "gym", 5.0, 5), ("A", "music", 8.0, 5), ("A", "cloud", 9.0, 5), ("A", "mobile", 40.0, 5))
+    s, sigma = np.array([0.5, 0.4, 0.6, 0.3]), np.array([3.6, 5.0, 3.6, 6.2])
+    mu = race_slot(t).to_numpy()
+    rng = np.random.default_rng(0)
+    draws = mu + sigma * rng.standard_normal((200_000, 4))
+    order = np.argsort(draws, axis=1)
+    s_ordered = s[order]
+    before = np.cumprod(1 - s_ordered, axis=1)
+    before = np.concatenate([np.ones((len(draws), 1)), before[:, :-1]], axis=1)
+    p_ordered = s_ordered * before
+    mc = np.zeros(4)
+    for k in range(4):
+        mc += np.bincount(order[:, k], weights=p_ordered[:, k], minlength=4)
+    mc /= len(draws)
+    exact = soft_proba(t, s, sigma, ["A"]).loc["A"]
+    for k, family in enumerate(t["family"].astype(str)):
+        assert exact[family] == pytest.approx(mc[k], abs=1e-3)
+
+
+def test_the_soft_race_refuses_a_missing_date_or_spread_instead_of_calling_the_client_none():
+    t = table(("A", "gym", 3.0, 5), ("A", "music", 9.0, 5))
+    for mu, sigma in (([3.0, np.nan], [4.0, 4.0]), ([3.0, 9.0], [4.0, np.nan]), ([3.0, 9.0], [4.0, 0.0]), ([np.inf, 9.0], [4.0, 4.0])):
+        with pytest.raises(ValueError, match="finite date"):
+            soft_race_proba(t, np.array([0.5, 0.5]), np.array(mu), np.array(sigma), pd.Index(["A"]))
+
+
+def test_a_client_gets_the_same_soft_probabilities_alone_and_in_a_batch_wider_than_it():
+    rng = np.random.default_rng(4)
+    streams = [(f"C{i:03d}", FAMILIES[rng.integers(7)], float(rng.integers(0, 40)), 3) for i in range(300) for _ in range(rng.integers(1, 9))]
+    t = table(*streams)
+    s, sigma = rng.random(len(t)), rng.uniform(3.6, 9.0, len(t))
+    clients = sorted(t["client_id"].unique())
+    batch = soft_proba(t, s, sigma, clients)  # crosses the 256-Client chunk boundary
+    for c in clients[::37]:
+        mine = (t["client_id"] == c).to_numpy()
+        alone = soft_proba(t[mine].reset_index(drop=True), s[mine], sigma[mine], [c])
+        pd.testing.assert_frame_equal(alone, batch.loc[[c]], check_exact=True)
+
+
+def test_jitter_scale_floors_scales_by_the_schedule_mad_and_marks_unprojected_streams():
+    rows = pd.DataFrame({"days_to_next": [10.0, 10.0, 10.0, np.nan], "gap_mad_days": [0.0, 1.0, 5.0, np.nan]})
+    np.testing.assert_allclose(
+        jitter_scale(rows),
+        [JITTER_FLOOR_DAYS, max(JITTER_FLOOR_DAYS, JITTER_MAD_SCALE), 5.0 * JITTER_MAD_SCALE, JITTER_UNPROJECTED_DAYS],
+    )
+    assert JITTER_FLOOR_DAYS > JITTER_MAD_SCALE * 1.0
+
+
+def soft_rows_of(t, labels, sigma=None):
+    sigma = np.full(len(t), JITTER_FLOOR_DAYS) if sigma is None else sigma
+    keep, target, weight, unexplained = soft_training_rows(t, pd.Series(labels), race_slot(t).to_numpy(), sigma)
+    kept = t.loc[keep].assign(target=target[keep], weight=weight[keep])
+    return kept, unexplained
+
+
+def test_soft_training_rows_weigh_each_other_stream_by_its_chance_of_being_due_first():
+    t = table(
+        ("A", "gym", 3.0, 5), ("A", "music", 10.0, 5), ("A", "cloud", 10.0, 5), ("A", "music", 12.0, 5), ("A", "software", 100.0, 5),
+        ("N", "gym", 3.0, 5), ("N", "music", 50.0, 5),
+        ("U", "gym", 3.0, 5),
+    )
+    # the label's stream (music, day 10) has spread 3.6; gym 7.0, the others 3.6
+    sigma = np.where(t["stream"].to_numpy() == 0, 7.0, JITTER_FLOOR_DAYS)
+    kept, unexplained = soft_rows_of(t, {"A": "music", "N": "none", "U": "cloud"}, sigma)
+    a = kept[kept["client_id"] == "A"].set_index("stream")
+    assert a.loc[1, ["target", "weight"]].tolist() == [1, 1.0]  # the label's stream
+    # due 7 days earlier: the gap over the pair's combined spread, sqrt(3.6^2 + 7^2)
+    assert a.loc[0, "target"] == 0 and a.loc[0, "weight"] == pytest.approx(norm.cdf(7.0 / np.hypot(JITTER_FLOOR_DAYS, 7.0)))
+    assert a.loc[2, "target"] == 0 and a.loc[2, "weight"] == pytest.approx(0.5)  # due the same day
+    # the label family's later stream gives no row even though it would carry weight
+    assert 3 not in a.index and norm.cdf(-2.0 / (np.sqrt(2) * JITTER_FLOOR_DAYS)) > 0.3
+    assert 4 not in a.index  # 90 days later: lighter than MIN_SOFT_WEIGHT, censored under every order
+    assert norm.cdf(-90.0 / (np.sqrt(2) * JITTER_FLOOR_DAYS)) < MIN_SOFT_WEIGHT
+    n = kept[kept["client_id"] == "N"]
+    assert n["target"].tolist() == [0, 0] and n["weight"].tolist() == [1.0, 1.0]
+    assert "U" not in set(kept["client_id"]) and unexplained == 1
+
+
+def test_soft_training_rows_agree_with_the_hard_rows_on_the_kept_set_when_jitter_vanishes():
+    t = hand_race_table(seed=3)
+    clients = sorted(t["client_id"].unique())
+    labels = pd.Series({c: "none" if i % 3 == 0 else t.loc[t["client_id"] == c, "family"].astype(str).iloc[i % 3]
+                        for i, c in enumerate(clients)})
+    keep, target, _ = training_rows(t, labels)
+    soft_keep, soft_target, weight, _ = soft_training_rows(t, labels, race_slot(t).to_numpy(), np.full(len(t), 1e-9))
+    np.testing.assert_array_equal(soft_keep, keep)
+    np.testing.assert_array_equal(soft_target[keep], target[keep])
+    np.testing.assert_allclose(weight[keep], 1.0)
+
+
+def test_the_soft_fit_passes_its_weights_to_lightgbm(monkeypatch):
+    seen = []
+    fit = lgb.LGBMClassifier.fit
+
+    def spying(self, x, y, *args, **kwargs):
+        seen.append((x.copy(), np.asarray(y).copy(), kwargs.get("sample_weight")))
+        return fit(self, x, y, *args, **kwargs)
+
+    monkeypatch.setattr(lgb.LGBMClassifier, "fit", spying)
+    t = hand_race_table()
+    clients = sorted(t["client_id"].unique())
+    labels = pd.Series({c: "none" if i % 3 == 0 else t.loc[t["client_id"] == c, "family"].astype(str).iloc[i % 3]
+                        for i, c in enumerate(clients)})
+    monkeypatch.setattr(survival, "_streams_of", lambda transactions, clients: None)
+    monkeypatch.setattr(survival, "race_table", lambda streams, order: t)
+    keep, target, weight, _ = soft_training_rows(t, labels, race_slot(t).to_numpy(), jitter_scale(t))
+    assert 0 < keep.sum() < len(t) and (weight[keep] < 1).any()
+
+    model = SurvivalModel(soft=True, soft_fit=True).fit(pd.DataFrame({"client_id": labels.index}), labels)
+    [(x, y, w)] = seen
+    pd.testing.assert_frame_equal(x, t.loc[keep, FEATURE_COLUMNS])
+    np.testing.assert_array_equal(y, target[keep])
+    np.testing.assert_array_equal(w, weight[keep])
+    assert model.n_training_rows == keep.sum() and model.training_weight == pytest.approx(weight[keep].sum())
+    assert model.variant == "+monthly-slot+soft-fit"
+    for soft in (True, False):  # the soft race proper (and the hard race) fit the hard rows, unweighted
+        seen.clear()
+        hard_keep, hard_target, _ = training_rows(t, labels)
+        SurvivalModel(soft=soft).fit(pd.DataFrame({"client_id": labels.index}), labels)
+        [(x, y, w)] = seen
+        pd.testing.assert_frame_equal(x, t.loc[hard_keep, FEATURE_COLUMNS])
+        np.testing.assert_array_equal(y, hard_target[hard_keep])
+        assert w is None
+
+
+def test_the_soft_race_needs_the_monthly_slot_order_and_the_soft_fit_needs_the_soft_race():
+    for order in ORDERS:
+        if order == SOFT_ORDER:
+            assert SurvivalModel(order=order, soft=True).soft is True
+        else:
+            with pytest.raises(ValueError, match="soft race"):
+                SurvivalModel(order=order, soft=True)
+    with pytest.raises(ValueError, match="soft_fit"):
+        SurvivalModel(soft_fit=True)
+    assert (SurvivalModel().soft, SurvivalModel().soft_fit) == (False, False)
+
+
+def test_the_soft_race_is_saved_and_loaded_and_a_model_saved_before_it_was_a_setting_is_hard(fetched, tmp_path):
+    separable_project(fetched)
+    transactions, labels = train_split(fetched)
+    valid = data.load_transactions(fetched.raw, "valid")
+    clients = pd.Index(sorted(valid["client_id"].unique()), name="client_id")
+    soft = SurvivalModel(soft=True).fit(transactions, labels)
+    hard = SurvivalModel().fit(transactions, labels)
+    before = soft.predict_proba(valid, clients)
+    np.testing.assert_allclose(before.sum(axis=1), 1.0, rtol=0, atol=1e-12)
+    hard_proba = hard.predict_proba(valid, clients)
+    np.testing.assert_allclose(before["none"], hard_proba["none"], rtol=0, atol=1e-12)  # the same fit, the same none
+    soft.save(tmp_path / "survival.json")
+    loaded = SurvivalModel.load(tmp_path / "survival.json")
+    assert (loaded.soft, loaded.soft_fit) == (True, False)
+    pd.testing.assert_frame_equal(loaded.predict_proba(valid, clients), before, check_exact=True)
+    saved = json.loads((tmp_path / "survival.json").read_text())
+    del saved["soft"], saved["soft_fit"]
+    (tmp_path / "old.json").write_text(json.dumps(saved))
+    assert (SurvivalModel.load(tmp_path / "old.json").soft, SurvivalModel.load(tmp_path / "old.json").soft_fit) == (False, False)
+    weighted = SurvivalModel(soft=True, soft_fit=True).fit(transactions, labels)
+    weighted.save(tmp_path / "weighted.json")
+    reloaded = SurvivalModel.load(tmp_path / "weighted.json")
+    assert (reloaded.soft, reloaded.soft_fit) == (True, True)
+    assert reloaded.training_weight == weighted.training_weight and reloaded.summary() == weighted.summary()
+    assert "soft fit, total weight" in reloaded.summary()
+    pd.testing.assert_frame_equal(reloaded.predict_proba(valid, clients), weighted.predict_proba(valid, clients), check_exact=True)
+
+
+def hand_soft_table():
+    """Two Clients with every feature column. A: a projected music stream due on day 10.4 whose schedule MAD
+    gives it the single-payment spread, and a single-payment gym stream paid 20 days ago (monthly slot
+    30.4 - 20 = 10.4): the same day and the same spread, so the closed form of an even split applies.
+    B: three projected streams a few days apart."""
+    rows = [
+        dict(client_id="A", family="music", days_to_next=10.4, n_payments=6.0, days_since_last=20.0, gap_mad_days=JITTER_UNPROJECTED_DAYS / JITTER_MAD_SCALE),
+        dict(client_id="A", family="gym", days_to_next=np.nan, n_payments=1.0, days_since_last=20.0, gap_mad_days=np.nan),
+        dict(client_id="B", family="cloud", days_to_next=5.0, n_payments=4.0, days_since_last=25.0, gap_mad_days=1.0),
+        dict(client_id="B", family="mobile", days_to_next=7.0, n_payments=5.0, days_since_last=23.0, gap_mad_days=0.5),
+        dict(client_id="B", family="insurance", days_to_next=9.0, n_payments=3.0, days_since_last=21.0, gap_mad_days=4.0),
+    ]
+    out = pd.DataFrame(rows)
+    for c in FEATURE_COLUMNS:
+        if c not in out:
+            out[c] = 1.0
+    out["family"] = pd.Categorical(out["family"], categories=FAMILIES)
+    return race_order(out[["client_id", *FEATURE_COLUMNS]], "monthly-slot")
+
+
+def test_the_soft_model_predicts_the_soft_race_and_a_single_payment_stream_races_at_its_monthly_slot(monkeypatch):
+    t = hand_soft_table()
+    s = t["family"].astype(str).map({"music": 0.6, "gym": 0.5, "cloud": 0.5, "mobile": 0.4, "insurance": 0.3}).to_numpy()
+    monkeypatch.setattr(survival, "_streams_of", lambda transactions, clients: None)
+    monkeypatch.setattr(survival, "race_table", lambda streams, order: t)
+    monkeypatch.setattr(SurvivalModel, "survival", lambda self, table: s)
+    clients = pd.Index(["A", "B"], name="client_id")
+    soft = SurvivalModel(soft=True, constant=0.0).predict_proba(pd.DataFrame(), clients)
+    hard = SurvivalModel(constant=0.0).predict_proba(pd.DataFrame(), clients)
+    expected = soft_race_proba(t, s, race_slot(t, "monthly-slot").to_numpy(), jitter_scale(t), clients)
+    pd.testing.assert_frame_equal(soft, expected, check_exact=True)
+    # A: the single-payment gym stream's slot is 10.4 with spread 6.2, the same as music's: an even split
+    np.testing.assert_allclose(jitter_scale(t)[:2], JITTER_UNPROJECTED_DAYS)
+    assert soft.loc["A", "music"] == pytest.approx(0.6 * (1 - 0.25), abs=1e-9)
+    assert soft.loc["A", "gym"] == pytest.approx(0.5 * (1 - 0.3), abs=1e-9)
+    # the hard race gave whichever won the (floating-point) tie on the slot all it could
+    a = t[t["client_id"] == "A"].sort_values("order")["family"].astype(str).tolist()
+    first, second = ({"music": 0.6, "gym": 0.5}[f] for f in a)
+    assert hard.loc["A", a[0]] == pytest.approx(first) and hard.loc["A", a[1]] == pytest.approx((1 - first) * second)
+    # B: the soft race moves mass from the first to the later streams and keeps none
+    assert soft.loc["B", "cloud"] < hard.loc["B", "cloud"] and soft.loc["B", "insurance"] > hard.loc["B", "insurance"]
+    assert soft.loc["B", "none"] == pytest.approx(hard.loc["B", "none"], abs=1e-15)
+    np.testing.assert_allclose(soft.sum(axis=1), 1.0, rtol=0, atol=1e-12)
+
+
+class SoftRecorder(SurvivalModel):
+    """Records (order, soft) of every model the CLI makes."""
+
+    made: list = []
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        type(self).made.append((self.order, self.soft))
+
+
+def test_soft_race_reaches_the_model_every_fold_the_meta_and_the_log(fetched, monkeypatch, capsys):
+    separable_project(fetched)
+    monkeypatch.setattr(SoftRecorder, "made", [])
+    monkeypatch.setitem(models.MODELS, "survival", SoftRecorder)
+    assert fetched.run("train", "--model", "survival", "--soft-race", "--decision", "tuned", "--folds", "3") == 0
+    assert SoftRecorder.made == [(SOFT_ORDER, True)] * 4
+    assert "soft survival race (monthly-slot, uncertain dates):" in capsys.readouterr().out
+    artifacts = fetched.root / "artifacts"
+    assert json.loads((artifacts / "survival.json").read_text())["soft"] is True
+    meta = json.loads((artifacts / "survival.meta.json").read_text())
+    assert (meta["race_order"], meta["soft_race"]) == (SOFT_ORDER, True)
+    assert fetched.run("evaluate", "--model", "survival", "--decision", "tuned") == 0
+    assert read_rows(fetched.log)[-1]["model"] == "survival+monthly-slot+soft+tuned"
+    assert SoftRecorder.made[4:] == [(SOFT_ORDER, True)]  # evaluate loaded the saved model as soft
+    assert fetched.run("cv", "--model", "survival", "--soft-race", "--out", str(fetched.root / "oof.csv")) == 0
+    assert SoftRecorder.made[5:] == [(SOFT_ORDER, True)] * 5
+    assert SurvivalModel(soft=True).variant == "+monthly-slot+soft"
+    assert fetched.run("train", "--model", "survival") == 0
+    assert SoftRecorder.made[-1] == (DEFAULT_ORDER, False)
+    assert json.loads((artifacts / "survival.meta.json").read_text())["soft_race"] is False
+
+
+def test_soft_race_applies_to_the_survival_model_with_the_monthly_slot_order_only(fetched, capsys):
+    separable_project(fetched)
+    for command in ("train", "cv"):
+        for model in ("ranker", "blend", "rules", "lgbm", "prior"):
+            with pytest.raises(SystemExit):
+                fetched.run(command, "--model", model, "--soft-race")
+            assert "--soft-race" in capsys.readouterr().err
+        for order in ("unprojected-last", "recent-first"):
+            with pytest.raises(SystemExit):
+                fetched.run(command, "--model", "survival", "--soft-race", "--race-order", order)
+            assert "--soft-race needs --race-order monthly-slot" in capsys.readouterr().err
+        assert fetched.run(command, "--model", "survival", "--soft-race", "--race-order", "monthly-slot",
+                           *(["--out", str(fetched.root / "oof.csv")] if command == "cv" else [])) == 0
