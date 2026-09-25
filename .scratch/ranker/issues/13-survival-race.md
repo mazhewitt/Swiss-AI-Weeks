@@ -44,6 +44,31 @@ Baseline: v2's setup (`ranker --none-model`, Pseudo-Labels at 2025-10-03, weight
 
 **Status:** ready-for-agent
 
+## Prototype result (gate passed, 09:45)
+
+`experiments/analysis/survival/prototype.py` and `baseline_v2_oof.py`: train 5-fold out-of-fold, folds of `rf cv`, current detector. 6,507 Candidate Streams, 3,913 training rows, and 87 unexplained Clients dropped.
+
+| Variant | argmax | tuned | nested tuned | nested vs v2 | s AUC |
+|---|---|---|---|---|---|
+| ranker + Pseudo-Labels (noon setup) | 0.5422 | 0.5810 | 0.5651 | −0.043 | |
+| v2 baseline: ranker + `none` model + Pseudo-Labels | 0.6081 | 0.6198 | 0.6082 | | |
+| **S-rank: ranker features only** (chosen) | 0.6322 | 0.6418 | **0.6239** | **+0.016** | 0.863 |
+| S-full: plus churn and Client churn features | 0.6341 | 0.6451 | 0.6171 | +0.009 | 0.881 |
+
+- **The coin is not fair.** s has AUC 0.86 on its own rows, and the mean s is 0.33.
+- **P(`none`) is calibrated by number of active families:**
+
+  | Active families | predicted | observed |
+  |---|---|---|
+  | 1 | 0.354 | 0.321 |
+  | 2 | 0.230 | 0.217 |
+  | 3 | 0.140 | 0.128 |
+  | 4 | 0.108 | 0.064 (over-predicted) |
+
+- **S-rank is chosen, not the S-full variant this ticket expected.** It is best on nested, and it uses only the 16 ranker features. The churn features are the ones that drifted between train and test (ticket 09 review), so fewer is safer.
+- **Variant 3 (Pseudo-Labels) is not run.** Adding churn features did not help, and Pseudo-Labels teach s ≈ 1. It is deferred to after the deadline.
+- **Build:** `--model survival` with the S-rank features, no Pseudo-Labels and no `none` model.
+
 ## Plan and gates (Day 2, times CEST)
 
 | Time | Step | Gate |

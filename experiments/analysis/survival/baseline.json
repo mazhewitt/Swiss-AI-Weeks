@@ -1,0 +1,14 @@
+[
+ {
+  "variant": "baseline v2 (ranker+none+pseudo)",
+  "argmax_macro_f1": 0.6081,
+  "tuned_macro_f1": 0.6198,
+  "nested_tuned_macro_f1": 0.6082
+ },
+ {
+  "variant": "ranker+pseudo (no none model)",
+  "argmax_macro_f1": 0.5422,
+  "tuned_macro_f1": 0.581,
+  "nested_tuned_macro_f1": 0.5651
+ }
+]
