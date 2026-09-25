@@ -7,6 +7,9 @@
 # highest-scoring candidate instead: run 20260924T171108-3251a4 (ranker+pseudo+tuned, 0.5735),
 # refit with the same settings on train plus the selection set. Never reads the sealed holdout.
 #
+# Reproduces the committed file only at commit 82f79d3 or earlier: ticket 11's detector (Stray Payments,
+# 16588eb) changes 79 rows, and the ranker takes no --param to switch it off. Upload the committed file.
+#
 # Run from the repo root, after `uv run rf fetch-data` and `uv run rf split`:
 #     bash scripts/day2_noon_ranker_pseudo.sh
 set -euo pipefail

@@ -105,6 +105,45 @@ Byte identity: the fast suite passes (473). `scripts/day2_final_ranker_none_v2.s
 - [x] The combination is unit-tested: known s values give the closed-form probabilities, and a family's streams sum
 - [x] No valid label reaches training (the existing label guards cover `--model survival`). Injecting Decoy Transactions leaves the features unchanged
 - [x] Every existing output is byte-identical (ranker, ranker `--none-model`, blend, rules, the milestone scripts); the noon file's drift is older than this change (see Implementation)
-- [ ] Train out-of-fold table for variants 1–3 and the baseline, and the diagnostics, recorded here
-- [ ] One selection run logged, predictions committed; the candidate file is valid (`rf submit` check)
+- [x] Train out-of-fold table for variants 1–3 and the baseline, and the diagnostics, recorded here
+- [x] One selection run logged, predictions committed; the candidate file is valid (`rf submit` check)
 - [x] Fast test suite passes
+
+## Selection result (10:10)
+
+Run `20260925T080905-fd1dc5` (`survival+tuned`) scores **0.5903** on the selection set. The runs it was compared with:
+
+| Compared with | Its score | Delta (95% interval) | Verdict |
+|---|---|---|---|
+| v2 `20260925T001755-e309a3` | 0.5871 | +0.0032 (−0.0227 .. +0.0292) | tie |
+| previous best, v3 `20260925T014822-cd37c4` | 0.5884 | +0.0020 | tie |
+
+- **Agreement with v2:** 82.9% on selection and 84.0% on test. The hedge (noon file) agrees with v2 on 82.0% and 85.8%, and scores 0.5735 on selection.
+- **Per label:**
+
+  | Label | F1 |
+  |---|---|
+  | cloud | .567 |
+  | gym | .591 |
+  | insurance | .612 |
+  | mobile | .701 |
+  | music | .508 |
+  | software | .517 |
+  | streaming | .559 |
+  | none | .668 |
+
+  Mobile and insurance, v2's weakest labels, are the biggest gains.
+- **The +0.016 nested gain on train shrinks to +0.003 on selection.**
+- **Candidate file:** `scripts/day2_final_survival.sh` refits on train plus the selection set and writes `submissions/day2_final_survival.csv` (valid).
+- **15:30 gate, strictly:** not met. It doesn't beat v2 by 0.03, and it disagrees with v2 on 17%, below the 20% bar. Against the hedge it is the better second slot: it scores higher (0.5903 vs 0.5735) and disagrees with v2 on test more (16.0% vs 14.2%). Humans decide.
+
+## Review (three critics; merged 83da12a)
+
+- **No blocking findings.** No leakage, no regression, and the model is deterministic and batch-independent. `day2_final_ranker_none_v2.csv` is byte-identical.
+- **Test strength:** 6 surviving mutants were closed by 9 new tests (fix round 1).
+- **Rule breach, disclosed:** the spec critic ran `rf train --with-selection` once (the refit path) and looked at no labels or predictions.
+- **Follow-ups:**
+  - ties among single-payment streams fall back to alphabetical family order (11 of 2,000 train argmaxes);
+  - `n_unexplained` counts labels of Clients with no transactions passed in;
+  - `cmd_submit` doesn't wrap prediction in `data.predicting()` (every model; harmless);
+  - `scripts/day2_noon_ranker_pseudo.sh` no longer reproduces its committed file since ticket 11 (header note added).
