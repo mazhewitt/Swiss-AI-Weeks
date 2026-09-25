@@ -561,5 +561,392 @@
     "stream_payments_per_client": 16.152
    }
   }
+ },
+ "corruption": {
+  "stream_payments": 35738,
+  "train_transactions": 147459,
+  "doses": {
+   "0": {
+    "description_replaced": 0,
+    "mcc_replaced": 0,
+    "description_changed": 0,
+    "mcc_changed": 0,
+    "content_hash": "47d14bc68963"
+   },
+   "0.5": {
+    "description_replaced": 9075,
+    "mcc_replaced": 2219,
+    "description_changed": 8993,
+    "mcc_changed": 2173,
+    "content_hash": "9de3385b0547"
+   },
+   "1": {
+    "description_replaced": 18046,
+    "mcc_replaced": 4426,
+    "description_changed": 17890,
+    "mcc_changed": 4321,
+    "content_hash": "a7708bc9684a"
+   }
+  }
+ },
+ "step2_nested_e3": {
+  "hailmary_A_cached": {
+   "nested_e3_macro_f1": 0.631,
+   "folds": [
+    0.6215,
+    0.643,
+    0.6248,
+    0.6105,
+    0.6487
+   ],
+   "tuned_in_sample_macro_f1": 0.6493,
+   "argmax_macro_f1": 0.6413,
+   "f1": {
+    "cloud": 0.5785,
+    "gym": 0.6092,
+    "insurance": 0.6681,
+    "mobile": 0.6222,
+    "music": 0.6194,
+    "software": 0.5868,
+    "streaming": 0.6222,
+    "none": 0.7418
+   },
+   "none_share_predicted": 0.265
+  },
+  "0": {
+   "nested_e3_macro_f1": 0.631,
+   "folds": [
+    0.6215,
+    0.643,
+    0.6248,
+    0.6105,
+    0.6487
+   ],
+   "tuned_in_sample_macro_f1": 0.6493,
+   "argmax_macro_f1": 0.6413,
+   "f1": {
+    "cloud": 0.5785,
+    "gym": 0.6092,
+    "insurance": 0.6681,
+    "mobile": 0.6222,
+    "music": 0.6194,
+    "software": 0.5868,
+    "streaming": 0.6222,
+    "none": 0.7418
+   },
+   "none_share_predicted": 0.265,
+   "v2_alone_nested_e3": 0.6082,
+   "surv_alone_nested_e3": 0.6239,
+   "pseudo": {
+    "pseudo_rows": 31556,
+    "train_pseudo_none_share": 0.1445,
+    "train_pseudo_label_mix": {
+     "none": 289,
+     "streaming": 258,
+     "insurance": 257,
+     "software": 254,
+     "music": 253,
+     "mobile": 249,
+     "cloud": 229,
+     "gym": 211
+    }
+   }
+  },
+  "0.5": {
+   "nested_e3_macro_f1": 0.6206,
+   "folds": [
+    0.633,
+    0.6088,
+    0.6049,
+    0.625,
+    0.6249
+   ],
+   "tuned_in_sample_macro_f1": 0.6438,
+   "argmax_macro_f1": 0.633,
+   "f1": {
+    "cloud": 0.5691,
+    "gym": 0.6005,
+    "insurance": 0.6346,
+    "mobile": 0.6316,
+    "music": 0.5935,
+    "software": 0.5965,
+    "streaming": 0.613,
+    "none": 0.7258
+   },
+   "none_share_predicted": 0.2595,
+   "v2_alone_nested_e3": 0.6046,
+   "surv_alone_nested_e3": 0.6063,
+   "pseudo": {
+    "pseudo_rows": 31351,
+    "train_pseudo_none_share": 0.16,
+    "train_pseudo_label_mix": {
+     "none": 320,
+     "streaming": 256,
+     "insurance": 252,
+     "music": 248,
+     "software": 246,
+     "mobile": 245,
+     "cloud": 225,
+     "gym": 208
+    }
+   }
+  },
+  "1": {
+   "nested_e3_macro_f1": 0.5943,
+   "folds": [
+    0.6046,
+    0.5943,
+    0.5891,
+    0.5829,
+    0.595
+   ],
+   "tuned_in_sample_macro_f1": 0.62,
+   "argmax_macro_f1": 0.6131,
+   "f1": {
+    "cloud": 0.5768,
+    "gym": 0.5813,
+    "insurance": 0.6241,
+    "mobile": 0.5847,
+    "music": 0.5519,
+    "software": 0.5432,
+    "streaming": 0.589,
+    "none": 0.7036
+   },
+   "none_share_predicted": 0.2515,
+   "v2_alone_nested_e3": 0.5959,
+   "surv_alone_nested_e3": 0.6081,
+   "pseudo": {
+    "pseudo_rows": 30787,
+    "train_pseudo_none_share": 0.183,
+    "train_pseudo_label_mix": {
+     "none": 366,
+     "insurance": 253,
+     "mobile": 247,
+     "streaming": 245,
+     "software": 235,
+     "music": 230,
+     "cloud": 219,
+     "gym": 205
+    }
+   }
+  },
+  "dose0_v2_max_abs_diff_vs_hailmary_cache": 0.0,
+  "dose0_surv_max_abs_diff_vs_hailmary_cache": 0.0,
+  "drop_vs_clean": {
+   "0": 0.0,
+   "0.5": -0.0104,
+   "1": -0.0367
+  },
+  "paired_bootstrap_vs_clean": {
+   "0.5": {
+    "delta": -0.0105,
+    "low": -0.0247,
+    "high": 0.0037
+   },
+   "1": {
+    "delta": -0.0367,
+    "low": -0.0541,
+    "high": -0.0196
+   }
+  }
+ },
+ "step2_closure": {
+  "0.5": {
+   "all": {
+    "n_on_schedule": 35125,
+    "n_members": 34350,
+    "n_slot": 775,
+    "chance_slot_hits": 157.55,
+    "description": {
+     "own": 0.7196,
+     "filler": 0.2654,
+     "decoy": 0.0072,
+     "other_family": 0.0049,
+     "other": 0.0028
+    },
+    "description_noise": 0.2804,
+    "mcc_noise": 0.0871,
+    "members_only": {
+     "description_noise": 0.27,
+     "mcc_noise": 0.0831
+    }
+   },
+   "fragmentation": {
+    "clients": 2000,
+    "streams_per_client": 3.2325,
+    "streams_2plus_per_client": 2.578,
+    "single_payment_stream_share": 0.2025,
+    "payments_per_stream_2plus": 6.662,
+    "missed_slots_per_stream": 0.3881,
+    "missed_slot_rate": 0.0641,
+    "active_streams_per_client": 1.5475,
+    "stream_payments_per_client": 17.829
+   },
+   "mcc_noise_given_description": {
+    "own": 0.0853,
+    "not_own": 0.1048
+   },
+   "description_noise_dispersion": 1.047
+  },
+  "1": {
+   "all": {
+    "n_on_schedule": 32924,
+    "n_members": 31880,
+    "n_slot": 1044,
+    "chance_slot_hits": 151.47,
+    "description": {
+     "own": 0.504,
+     "filler": 0.4731,
+     "decoy": 0.0126,
+     "other_family": 0.0064,
+     "other": 0.0039
+    },
+    "description_noise": 0.496,
+    "mcc_noise": 0.1333,
+    "members_only": {
+     "description_noise": 0.4852,
+     "mcc_noise": 0.1282
+    }
+   },
+   "fragmentation": {
+    "clients": 2000,
+    "streams_per_client": 2.993,
+    "streams_2plus_per_client": 2.3005,
+    "single_payment_stream_share": 0.2314,
+    "payments_per_stream_2plus": 6.929,
+    "missed_slots_per_stream": 0.4851,
+    "missed_slot_rate": 0.0756,
+    "active_streams_per_client": 1.4435,
+    "stream_payments_per_client": 16.633
+   },
+   "mcc_noise_given_description": {
+    "own": 0.1382,
+    "not_own": 0.1353
+   },
+   "description_noise_dispersion": 0.992
+  }
+ },
+ "step2_drift": {
+  "method": "LightGBM train-vs-test, 5-fold x 3 seeds (ticket 11's shift11.py), Clients with a stream, v2 none model's stream features",
+  "0": {
+   "A+B": {
+    "auc": 0.7251,
+    "top": [
+     "max_amount_cv",
+     "stream_first_days",
+     "n_ended",
+     "min_days_since_first",
+     "n_short"
+    ]
+   },
+   "group A": {
+    "auc": 0.618,
+    "top": [
+     "max_amount_cv",
+     "min_days_since_first",
+     "max_days_since_first",
+     "min_amount_cv",
+     "max_gap_mad_days"
+    ]
+   },
+   "group B": {
+    "auc": 0.6973,
+    "top": [
+     "stream_first_days",
+     "n_ended",
+     "stream_activity_ratio60",
+     "n_short",
+     "total_payments"
+    ]
+   },
+   "means": {
+    "max_missed_rate": 0.0627,
+    "n_short": 1.1161,
+    "n_ended": 0.5831,
+    "n_active_streams": 1.6584
+   }
+  },
+  "0.5": {
+   "A+B": {
+    "auc": 0.6761,
+    "top": [
+     "stream_first_days",
+     "max_amount_cv",
+     "n_ended",
+     "min_days_since_first",
+     "stream_activity_ratio60"
+    ]
+   },
+   "group A": {
+    "auc": 0.5963,
+    "top": [
+     "max_amount_cv",
+     "min_days_since_first",
+     "min_gap_mad_days",
+     "min_amount_cv",
+     "max_days_since_first"
+    ]
+   },
+   "group B": {
+    "auc": 0.6563,
+    "top": [
+     "stream_first_days",
+     "n_ended",
+     "stream_activity_ratio90",
+     "min_gap_trend",
+     "stream_last_days"
+    ]
+   },
+   "means": {
+    "max_missed_rate": 0.073,
+    "n_short": 1.2104,
+    "n_ended": 0.5403,
+    "n_active_streams": 1.6078
+   }
+  },
+  "1": {
+   "A+B": {
+    "auc": 0.6432,
+    "top": [
+     "stream_first_days",
+     "min_days_since_first",
+     "stream_activity_ratio60",
+     "max_expected_minus_actual",
+     "max_amount_cv"
+    ]
+   },
+   "group A": {
+    "auc": 0.5489,
+    "top": [
+     "min_days_since_first",
+     "max_days_since_last",
+     "min_amount_cv",
+     "max_period_days",
+     "max_amount_cv"
+    ]
+   },
+   "group B": {
+    "auc": 0.6373,
+    "top": [
+     "stream_first_days",
+     "stream_activity_ratio60",
+     "max_expected_minus_actual",
+     "stream_activity_ratio90",
+     "n_short"
+    ]
+   },
+   "means": {
+    "max_missed_rate": 0.0903,
+    "n_short": 1.1538,
+    "n_ended": 0.473,
+    "n_active_streams": 1.5155
+   }
+  },
+  "test_means": {
+   "max_missed_rate": 0.0887,
+   "n_short": 1.3013,
+   "n_ended": 0.2812,
+   "n_active_streams": 1.4503
+  }
  }
 }

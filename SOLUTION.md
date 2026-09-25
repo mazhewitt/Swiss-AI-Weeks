@@ -118,6 +118,53 @@ Test runs about 0.035 below train, so 0.68 on test needs an extra `none` signal 
 
 **4. How we chose the last upload.** The 0.03 tie rule stays for every "better" claim here, but it is the wrong rule for choosing an upload. Only the best upload counts and v2's 0.606 is already locked in, so a worse upload costs nothing. Candidates therefore entered a pool if they beat v2 on selection and disagreed with v2's file on at least 10% of test Clients. They were ranked by the selection gain minus 1.7 paired standard errors, a correction for having tried about 15 things. The hail mary ranked first (−0.008), ahead of the `none` stacker (−0.010) and the batch decision (−0.010). Ticket 21's weighted refit then replaced it under its own pre-registered rule: it had to beat weight 1 in the rehearsal, disagree with v2 on at least 10% of test Clients, and be ready by 17:10.
 
+## Post-mortem: the regime change we measured but did not model
+
+After the final submission we learned how 0.68 was reached: there is a regime change between train and valid/test, and valid/test are noisier in their descriptions and MCCs. We tested that explanation after the fact (ticket 23, pre-registered, train labels only).
+
+**The noise, measured** on payments that sit on a subscription stream's schedule:
+
+| | train | valid | test |
+|---|---|---|---|
+| Description does not name the family | 6% | 39% | **53%** |
+| MCC is not the family's home MCC | 4% | 12% | **15%** |
+| Streams with a single payment | 18% | 30% | 30% |
+
+- In test, about half of real subscription payments carry a generic Filler Description ("member plan", "subscription charge", "digital service", "monthly plan").
+- This noise is independent per payment, and independent of the MCC noise.
+- In train the little noise there is clusters on a few Clients, which is why it marked `none` there.
+
+**The noise explains our train→test gap.** We corrupted train to test's noise level, with the labels unchanged, and reran our pipeline:
+
+| Corruption | Train macro-F1 (nested) |
+|---|---|
+| none | 0.631 |
+| half test's level | 0.621 |
+| **test's level** | **0.594** (−0.037, 95% −0.054 .. −0.020) |
+
+That is our test level. The same corruption also removes about a third of the train-vs-test drift in our stream features.
+
+**Why our design suffered.** Our stream detector (ADR 0001) decides a payment's family from its description and its family's home MCC, and a Filler payment never starts or extends a stream. When half the payments are Fillers, streams break apart. Broken streams look like churn (missed slots, single-payment streams, fewer Active Streams), so the models lean toward `none` and toward the wrong family.
+
+**What we saw and misread.** The signs were all in our own record:
+- missed-slot rates rising from train to valid to test (ticket 11);
+- Filler Descriptions inside real streams on 65–77% of valid/test Clients (ticket 16);
+- Decoy-described payments on schedule (ticket 12);
+- train-vs-test classifiers at AUC 1.0;
+- every train gain shrinking on valid and test.
+
+We treated each as drift to be robust against: joining strays one rule at a time, ranking features within each domain, dropping features that drift. We should have asked what process produced it. Three things kept us from that:
+- each sign was, on its own, a "tie" or an "artefact";
+- every model was anchored on 2,000 train-regime Clients;
+- our rule against modelling the generator made us wary of describing the data's structure at all, when describing the observation noise is ordinary data work.
+
+**What a regime-aware solution would do** (not tested; the deadline had passed):
+- trust timing and amount first: build streams from amount plus periodicity, and give each stream a family by majority vote over its payments' descriptions and MCCs, so half its payments can be noisy;
+- train on train corrupted to test's measured noise, so the models learn the regime they will predict;
+- weight the valid Clients up, which we did do, the one lever that moved (ticket 21).
+
+**The lesson.** When train and test separate perfectly, measure *what* differs and *why* before deciding how to be robust to it. A shift in how the data is recorded calls for a different fix than a shift in behaviour. We had the measurements from Day 1 and read them as noise to tolerate, when they were the regime to model.
+
 ## What we learned
 
 - **Where it is timing jitter, average over it.** A stream's real next payment misses its projection by 3.6 days typically (leave-last-out on 27,101 train and unlabeled streams), so when two streams are projected within a few days a fixed race order is a guess. The soft race (ticket 14) jitters each stream's date by its own spread and averages the Survival Race exactly over every order. P(`none`) cannot change (it is Π (1 − s) whatever the order), so only the split among detected families moves: on train out-of-fold it fixes 24 of the 75 close-call Clients and breaks none, +0.006 nested tuned; on selection 0.599 against 0.590 for the hard race (a tie). Weighting the fit's rows by the same uncertainty lost (−0.010): a target-0 row for a stream due after the label's stream teaches "stopped" to streams that were most likely alive.

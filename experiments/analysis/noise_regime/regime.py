@@ -48,7 +48,7 @@ from recurring_family import decision as decision_layer  # noqa: E402
 from recurring_family.cli import _labeller, _pseudo_training  # noqa: E402
 from recurring_family.config import CUTOFF, LABEL_COLUMN, LABELS, SHIFTED_CUTOFF  # noqa: E402
 from recurring_family.cross_validation import out_of_fold_proba  # noqa: E402
-from recurring_family.evaluation import score  # noqa: E402
+from recurring_family.evaluation import paired_bootstrap, score  # noqa: E402
 from recurring_family.none_model import GROUP_A, GROUP_B, NoneModel, client_features  # noqa: E402
 from recurring_family.ranker import pseudo_examples, RankerModel  # noqa: E402
 from recurring_family.streams import StreamParams, _detect_per_client, detect_stream_payments, detect_streams, pseudo_label_sweep  # noqa: E402
@@ -205,7 +205,7 @@ def averaged_oof(v2_path: Path, surv_path: Path) -> pd.DataFrame:
     return out
 
 
-def nested_e3(oof: pd.DataFrame, labels: pd.Series) -> dict:
+def nested_e3(oof: pd.DataFrame, labels: pd.Series, predictions: dict | None = None, name: str = "") -> dict:
     """Ticket 17's Gate A: tuned E3 fitted on four folds' out-of-fold probabilities, applied to the fifth."""
     nested = pd.Series(index=oof.index, dtype=object)
     folds = []
@@ -216,6 +216,8 @@ def nested_e3(oof: pd.DataFrame, labels: pd.Series) -> dict:
         nested.loc[held.index] = d.apply(held)
         folds.append(round(score(labels[held.index], nested[held.index])["macro_f1"], 4))
     s = score(labels, nested)
+    if predictions is not None:
+        predictions[name] = nested
     tuned = decision_layer.fit(oof[list(LABELS)], labels)[0].apply(oof[list(LABELS)])
     argmax = oof[list(LABELS)].idxmax(axis=1)
     return {
@@ -230,12 +232,12 @@ def nested_e3(oof: pd.DataFrame, labels: pd.Series) -> dict:
 def stage_score() -> None:
     labels = train_labels()
     labels = pd.Series(labels.astype(str).to_numpy(), index=labels.index.astype(str))
-    out = {}
+    out, predictions = {}, {}
     reference = averaged_oof(hm.cache("rehearsal") / "oof_v2.csv", hm.cache("rehearsal") / "oof_surv.csv")
     out["hailmary_A_cached"] = nested_e3(reference, labels.reindex(reference.index))
     for dose in DOSES:
         oof = averaged_oof(CACHE / f"oof_v2_dose{dose}.csv", CACHE / f"oof_surv_dose{dose}.csv")
-        out[dose] = nested_e3(oof, labels.reindex(oof.index))
+        out[dose] = nested_e3(oof, labels.reindex(oof.index), predictions, dose)
         for m in ("v2", "surv"):
             single = read_oof(CACHE / f"oof_{m}_dose{dose}.csv")
             out[dose][f"{m}_alone_nested_e3"] = nested_e3(single, labels.reindex(single.index))["nested_e3_macro_f1"]
@@ -247,8 +249,13 @@ def stage_score() -> None:
         out[f"dose0_{m}_max_abs_diff_vs_hailmary_cache"] = float((mine - cached.reindex(mine.index)).abs().max().max())
     base = out["0"]["nested_e3_macro_f1"]
     out["drop_vs_clean"] = {d: round(out[d]["nested_e3_macro_f1"] - base, 4) for d in DOSES}
+    # paired bootstrap over train Clients (same folds, same Clients): dose against clean
+    truth = labels.reindex(predictions["0"].index)
+    out["paired_bootstrap_vs_clean"] = {
+        d: {k: round(v, 4) for k, v in paired_bootstrap(truth, predictions[d], predictions["0"]).items()} for d in DOSES[1:]
+    }
     update_results("step2_nested_e3", out)
-    print(json.dumps(out["drop_vs_clean"]))
+    print(json.dumps(out["drop_vs_clean"]), json.dumps(out["paired_bootstrap_vs_clean"]))
 
 
 # --- drift and closure --------------------------------------------------------------------------------
