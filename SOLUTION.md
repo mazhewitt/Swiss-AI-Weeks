@@ -11,6 +11,32 @@ Our entry for the 2026 challenge (`hackathons/2026/challenge.md`). Glossary: `CO
 5. **Decision layer.** Per-label weights and a `none` threshold, fitted on out-of-fold probabilities, tune the decision for macro-F1.
 6. **Survival Race (the second candidate).** One model replaces steps 2–4. Each Candidate Stream gets a probability of surviving the Cutoff, and the streams race in projected payment order: the label is the first survivor, or `none` if none survives. Streams behind the label's stream are censored in training. It uses the ranker's stream features only: no Pseudo-Labels and no `none` model. Architecture and trade-offs: ADR 0002.
 
+Both candidates start from the same Candidate Streams (race and censoring diagrams: ADR 0002):
+
+```mermaid
+flowchart TB
+    T["Client's card payments"] --> S["Stream detector<br/>(rules, ADR 0001)"]
+    S --> C["Candidate Streams<br/>16 stream-table features each"]
+    subgraph V2["v2: ranker + none model"]
+        direction TB
+        R["Stream Ranker<br/>score per stream"] --> F["family share<br/>= best score / sum"]
+        N["Client-level none model<br/>104 features + cross-fitted ranker score"] --> M["P(family) = share × (1 − P(none))"]
+        F --> M
+        PL["Pseudo-Labels<br/>shifted cutoff"] -.-> R
+    end
+    subgraph SR["Survival Race"]
+        direction TB
+        SV["Survival model<br/>s = P(stream keeps paying)"] --> RC["Race in projected<br/>payment order"]
+        RC --> PR["P(next) per stream,<br/>P(none) = all stop"]
+    end
+    C --> R
+    C --> N
+    C --> SV
+    M --> DL["Tuned decision layer<br/>per-label weights + none threshold"]
+    PR --> DL
+    DL --> O["Next Recurring Family<br/>or none"]
+```
+
 ## How we evaluated
 
 - **Our split of the labelled valid Clients:** a 700-Client selection set, used for every decision, and a 300-Client sealed holdout that no agent or script reads. Only a human can start the holdout check, once, for the finalist.

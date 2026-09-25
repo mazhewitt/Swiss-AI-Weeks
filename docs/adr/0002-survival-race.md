@@ -6,13 +6,17 @@ Ticket 13. It is added beside the Stream Ranker, and it does not replace it.
 
 The Stream Ranker scores each Candidate Stream on its own, and a separate Client-level model predicts `none`. We broke down where the best such model (v2, run `20260925T001755-e309a3`, 0.5871 on selection) loses macro-F1 on the selection set. Fixing each bucket of errors in turn would gain:
 
-| Error | Clients | Gain if fixed |
-|---|---|---|
-| Wrong family, true family's stream detected | 111 | +0.19 |
-| Wrong family, true family not detected | 45 | +0.08 |
-| Truth `none`, a family predicted | 71 | +0.06 |
-| A family, predicted `none`, its stream detected | 31 | +0.05 |
-| A family, predicted `none`, not detected | 19 | +0.03 |
+```mermaid
+flowchart LR
+    A["v2 on 700 selection Clients<br/>423 right, 277 wrong<br/>macro-F1 0.587"] --> D1["True family's stream<br/>was detected: 142"]
+    A --> D2["True family never<br/>detected: 64"]
+    A --> D3["Truth none,<br/>a family predicted: 71"]
+    D1 --> P1["Picked a different<br/>detected stream: 111<br/><b>+0.19 if fixed</b>"]
+    D1 --> P2["Called it none: 31<br/>+0.05 if fixed"]
+    D2 --> P3["+0.08 (wrong family) and<br/>+0.03 (called none) if fixed;<br/>many are brand-new streams"]
+    D3 --> P4["+0.06 if fixed"]
+    style P1 fill:#fde2c8,stroke:#d9822b,stroke-width:2px
+```
 
 The largest loss is choosing among streams we *did* detect. In 84 of the 111 Clients, v2 picked the stream projected to pay first. The true stream was projected a median of 7 days later, which is too far to be schedule jitter on monthly streams.
 
@@ -27,18 +31,68 @@ The scripts are in `experiments/analysis/survival/`. This is a pattern found in 
 
 ## Decision
 
-`--model survival` (`src/recurring_family/survival.py`) models that process directly.
+`--model survival` (`src/recurring_family/survival.py`) models that process directly. It sits beside v2 and starts from the same Candidate Streams:
+
+```mermaid
+flowchart TB
+    T["Client's card payments"] --> S["Stream detector<br/>(rules, ADR 0001)"]
+    S --> C["Candidate Streams<br/>16 stream-table features each"]
+    subgraph V2["v2: ranker + none model"]
+        direction TB
+        R["Stream Ranker<br/>score per stream"] --> F["family share<br/>= best score / sum"]
+        N["Client-level none model<br/>104 features + cross-fitted ranker score"] --> M["P(family) = share × (1 − P(none))"]
+        F --> M
+        PL["Pseudo-Labels<br/>shifted cutoff"] -.-> R
+    end
+    subgraph SR["Survival Race"]
+        direction TB
+        SV["Survival model<br/>s = P(stream keeps paying)"] --> RC["Race in projected<br/>payment order"]
+        RC --> PR["P(next) per stream,<br/>P(none) = all stop"]
+    end
+    C --> R
+    C --> N
+    C --> SV
+    M --> DL["Tuned decision layer<br/>per-label weights + none threshold"]
+    PR --> DL
+    DL --> O["Next Recurring Family<br/>or none"]
+```
 
 - **The survival model.** A LightGBM binary model gives every Candidate Stream a survival probability s. Its features are the ranker's 16 stream-table features and nothing else (ADR 0001).
 - **The race.** Each Client's streams are ordered by projected next payment. With the order fixed:
   - P(stream i is next) = s_i × Π_{j before i} (1 − s_j)
   - P(`none`) = Π_j (1 − s_j)
   - A family's probability is the sum over its streams. A Client with no Candidate Stream is `none`.
+
+  A worked example: one Client, three streams, each asked in turn whether it keeps paying. The four outcomes sum to 1.
+
+  ```mermaid
+  flowchart LR
+      G{"gym<br/>due in 4 days<br/>keeps paying?<br/>s = 0.6"} -- "yes 0.6" --> PG["<b>gym</b><br/>0.60"]
+      G -- "no 0.4" --> Mu{"music<br/>due in 12 days<br/>s = 0.5"}
+      Mu -- "yes 0.5" --> PM["<b>music</b><br/>0.4 × 0.5 = 0.20"]
+      Mu -- "no 0.5" --> Cl{"cloud<br/>due in 20 days<br/>s = 0.3"}
+      Cl -- "yes 0.3" --> PC["<b>cloud</b><br/>0.4 × 0.5 × 0.3 = 0.06"]
+      Cl -- "no 0.7" --> PN["<b>none</b><br/>0.4 × 0.5 × 0.7 = 0.14"]
+  ```
 - **Training.** One Client's log-likelihood splits into plain binary rows:
   - the label's stream gets target 1;
   - every stream ordered before it gets target 0;
   - streams after it are **censored** and get no row, because nobody saw whether they would have paid;
   - a `none` Client gives every stream target 0.
+
+  ```mermaid
+  flowchart LR
+      subgraph L["Client labelled music: streams in race order"]
+          direction LR
+          A["gym<br/>due in 4 days"] --> B["music<br/>due in 12 days"] --> C["cloud<br/>due in 20 days"]
+      end
+      A -.- RA["row, target 0<br/>due first, but it stopped"]
+      B -.- RB["row, target 1<br/>it paid: the label"]
+      C -.- RC["no row: censored<br/>nobody saw whether it would pay"]
+      style RA fill:#f8d7da,stroke:#c0392b
+      style RB fill:#d4edda,stroke:#2e7d32
+      style RC fill:#eeeeee,stroke:#999999,stroke-dasharray: 4 3
+  ```
 
   So the fit is an ordinary LightGBM fit on a filtered set of rows: 3,913 of the 6,507 train candidates. The Stream Ranker, in these terms, trains those later streams as negatives.
 - **Decision layer.** The same tuned per-label weights and `none` threshold as every other model.
