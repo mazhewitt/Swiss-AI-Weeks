@@ -6,4 +6,8 @@
 
 **Blocked by:** 09, and a human decision on the drift check
 
-**Status:** needs-info
+**Status:** wontfix
+
+## Resolution
+
+Ticket 11's label-free diagnosis answered the drift question: the hidden series are Filler Descriptions booked on another family's home MCC. In train they mark `none` Clients (92.5% of train Clients with such a payment on a stream's schedule are truth-`none`). In valid and test they are part of real streams: 38% of valid and 52% of test Clients have one. A `none` feature built on them would learn a train-only artefact. Ticket 11 lets them join their stream instead.
