@@ -207,5 +207,168 @@
    "B_D": 232,
    "hail mary file": 214
   }
+ },
+ "rehearsal": {
+  "rows": [
+   {
+    "candidate": "B+E3",
+    "macro_f1": 0.5983,
+    "d": 0.0111,
+    "d_low": -0.0099,
+    "d_high": 0.0327,
+    "se_paired": 0.011,
+    "d_shrunk": -0.0076,
+    "d_vs_B_E3": 0.0,
+    "d_vs_B_E3_low": 0.0,
+    "d_vs_B_E3_high": 0.0,
+    "se_vs_B_E3": 0.0,
+    "test_disagreement_v2": 0.104,
+    "selection_agreement_v2": 0.8914,
+    "none_predicted_selection": 172,
+    "in_pool": true,
+    "f1_cloud": 0.5802,
+    "f1_gym": 0.6111,
+    "f1_insurance": 0.6289,
+    "f1_mobile": 0.6763,
+    "f1_music": 0.5224,
+    "f1_software": 0.5333,
+    "f1_streaming": 0.5655,
+    "f1_none": 0.6684
+   },
+   {
+    "candidate": "B+D",
+    "macro_f1": 0.5956,
+    "d": 0.0085,
+    "d_low": -0.0131,
+    "d_high": 0.0301,
+    "se_paired": 0.0111,
+    "d_shrunk": -0.0103,
+    "d_vs_B_E3": -0.0026,
+    "d_vs_B_E3_low": -0.0149,
+    "d_vs_B_E3_high": 0.0097,
+    "se_vs_B_E3": 0.0063,
+    "test_disagreement_v2": 0.102,
+    "selection_agreement_v2": 0.8829,
+    "none_predicted_selection": 170,
+    "in_pool": true,
+    "f1_cloud": 0.5846,
+    "f1_gym": 0.5955,
+    "f1_insurance": 0.6447,
+    "f1_mobile": 0.6901,
+    "f1_music": 0.5231,
+    "f1_software": 0.5101,
+    "f1_streaming": 0.5556,
+    "f1_none": 0.6613
+   },
+   {
+    "candidate": "N",
+    "macro_f1": 0.5974,
+    "d": 0.0103,
+    "d_low": -0.0132,
+    "d_high": 0.0341,
+    "se_paired": 0.012,
+    "d_shrunk": -0.0101,
+    "d_vs_B_E3": -0.0008,
+    "d_vs_B_E3_low": -0.02,
+    "d_vs_B_E3_high": 0.0185,
+    "se_vs_B_E3": 0.0098,
+    "test_disagreement_v2": 0.166,
+    "selection_agreement_v2": 0.8429,
+    "none_predicted_selection": 173,
+    "in_pool": true,
+    "f1_cloud": 0.5758,
+    "f1_gym": 0.5989,
+    "f1_insurance": 0.6447,
+    "f1_mobile": 0.6857,
+    "f1_music": 0.5077,
+    "f1_software": 0.5101,
+    "f1_streaming": 0.5634,
+    "f1_none": 0.6931
+   }
+  ],
+  "check_B_E3_vs_ticket17": {
+   "macro_f1": [
+    0.5983,
+    0.5983
+   ],
+   "d": [
+    0.0111,
+    0.0111
+   ],
+   "se_paired": [
+    0.011,
+    0.011
+   ],
+   "d_shrunk": [
+    -0.0076,
+    -0.0076
+   ],
+   "test_disagreement_v2": [
+    0.104,
+    0.104
+   ]
+  },
+  "context": {
+   "p_none_auc_selection_oof": {
+    "B": 0.8779,
+    "N (P' oof)": 0.8933
+   },
+   "true_none_selection": 205,
+   "optimism": "the same 700 selection labels chose this feature block (ticket 18), so N's score is optimistic"
+  }
+ },
+ "upload_rule": {
+  "rule": "ticket 17's pool rule: d > 0 against v2 and >= 10% test disagreement with v2's file; ranked by d~ = d - 1.7 SE_paired; pool extended with N and B+D; the top is the 17:30 upload",
+  "pool": [
+   {
+    "candidate": "hail mary A",
+    "d": 0.0111,
+    "se_paired": 0.011,
+    "d_shrunk": -0.0076,
+    "test_disagreement_v2": 0.104,
+    "file": "submissions/day2_final_hailmary.csv",
+    "source": "ticket 17"
+   },
+   {
+    "candidate": "N",
+    "d": 0.0103,
+    "se_paired": 0.012,
+    "d_shrunk": -0.0101,
+    "test_disagreement_v2": 0.166,
+    "file": "submissions/day2_final_none_stack.csv",
+    "source": "ticket 19"
+   },
+   {
+    "candidate": "B+D",
+    "d": 0.0085,
+    "se_paired": 0.0111,
+    "d_shrunk": -0.0103,
+    "test_disagreement_v2": 0.102,
+    "file": "(B+D on test: artifacts/none_stack/B_D_test.csv)",
+    "source": "ticket 19"
+   },
+   {
+    "candidate": "S+D",
+    "d": 0.0078,
+    "se_paired": 0.012,
+    "d_shrunk": -0.0126,
+    "test_disagreement_v2": 0.1,
+    "file": "submissions/day2_final_stack_d.csv",
+    "source": "ticket 17"
+   },
+   {
+    "candidate": "soft race",
+    "d": 0.0116,
+    "se_paired": 0.0152,
+    "d_shrunk": -0.0142,
+    "test_disagreement_v2": 0.165,
+    "file": "submissions/day2_final_survival_soft.csv",
+    "source": "ticket 17"
+   }
+  ],
+  "new_not_in_pool": [],
+  "chosen": "hail mary A",
+  "file": "submissions/day2_final_hailmary.csv",
+  "new": false
  }
 }
