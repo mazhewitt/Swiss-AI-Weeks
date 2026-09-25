@@ -49,7 +49,7 @@ Any of a Client's Recurring Streams, considered as the one that will carry the C
 _Avoid_: Option, choice
 
 **Decoy Transaction**:
-A card payment with a generic, subscription-sounding description (e.g. "digital order", "merchant charge") that belongs to no Recurring Stream.
+A card payment with a generic, subscription-sounding description (e.g. "digital order", "merchant charge") that belongs to no Recurring Stream. A payment with such a description that fits an empty slot of a stream's schedule at its amount joins that stream like a Stray Payment, as valid and test book some stream payments that way.
 _Avoid_: Noise, fake transaction
 
 **Filler Description**:
