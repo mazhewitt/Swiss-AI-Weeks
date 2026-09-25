@@ -82,3 +82,7 @@ One critic (leakage and regression). **None blocking.**
 - **Open (non-blocking):**
   - no test for `pseudo_labelling()` nested inside the unsealed mode (safe: that check runs first);
   - `unsealed-checked` relies on the script's `set -e` for the submit check.
+
+## Test leaderboard
+
+**0.60659**, against v2's 0.6059 (+0.0007): a tie. The file disagrees with v2 on 11.6% of test Clients, yet the score barely moved: the changes it made cancel out on test. Final best upload: 0.6066.
