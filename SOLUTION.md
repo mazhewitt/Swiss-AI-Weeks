@@ -163,6 +163,19 @@ We treated each as drift to be robust against: joining strays one rule at a time
 - train on train corrupted to test's measured noise, so the models learn the regime they will predict;
 - weight the valid Clients up, which we did do, the one lever that moved (ticket 21).
 
+**We tried the first two fixes after the competition (ticket 24).** Both lost on the selection set, cross-fitted over two halves, against ticket 21's 0.605:
+
+| Candidate | Selection macro-F1 | vs ticket 21 (95%) |
+|---|---|---|
+| Train (and unlabeled) corrupted to test's noise | 0.588 | −0.017 (−0.036 .. −0.001) |
+| An opt-in noise-robust detector (streams from amount and timing; family by majority vote) | 0.600 | −0.006 (−0.036 .. +0.024) |
+| Both | 0.596 | −0.009 |
+
+- **Corrupting train** cannot restore information the noise destroys. It only teaches the models to expect less, which confirms that ticket 23's loss is information, not mismatch.
+- **The first robust detector** over-fragments. It makes 56% of valid's streams single-payment, against 30% with the default detector. It gains on music, software and `none`, and loses on cloud and insurance.
+- The kept file is therefore ticket 21's method fitted on all 1,000 valid Clients: byte-identical to our final upload (0.6066).
+- **Where 0.64–0.68 lies:** stream reconstruction that is robust to noise without fragmenting, a harder detector problem than our first attempt. The diagnosis is right, but the fix needs more than a majority vote.
+
 **The lesson.** When train and test separate perfectly, measure *what* differs and *why* before deciding how to be robust to it. A shift in how the data is recorded calls for a different fix than a shift in behaviour. We had the measurements from Day 1 and read them as noise to tolerate, when they were the regime to model.
 
 ## What we learned
