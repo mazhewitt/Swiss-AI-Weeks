@@ -296,6 +296,7 @@ CHANGED_PARAMS = {
     "schedule_tolerance_days": "1",
     "stray_min_period_days": "20",
     "join_strays": "false",
+    "join_decoys": "true",
 }
 
 

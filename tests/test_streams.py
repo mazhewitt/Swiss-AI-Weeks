@@ -8,7 +8,7 @@ import pytest
 
 from recurring_family.config import CUTOFF, HORIZON
 from recurring_family.data import TRANSACTION_DTYPES
-from recurring_family.streams import StreamParams, detect_streams, pseudo_labels
+from recurring_family.streams import StreamParams, detect_stream_payments, detect_streams, pseudo_labels
 
 DAY = pd.Timedelta(days=1)
 
@@ -260,9 +260,15 @@ DECOYS = ["digital order", "merchant charge", "service payment", "card purchase"
 DECOY_MCCS = ["7997", "5812", "5734", "4814", "5732", "6300", "5411", "4111", "5999", "7011"]
 
 
-def test_injecting_decoys_at_test_like_rates_leaves_the_stream_table_unchanged():
+@pytest.mark.parametrize("join_decoys", [False, True])
+def test_injecting_decoys_at_test_like_rates_leaves_the_stream_table_unchanged(join_decoys):
+    # With `join_decoys` a Decoy-described payment joins only on an empty slot of a stream's schedule at
+    # its amount (ticket 12). None of these does: the random ones miss every empty slot (random Decoys
+    # rarely join: `test_random_decoy_transactions_rarely_join_a_stream`) and the shadows sit beside
+    # the stream's own payments.
+    params = StreamParams(join_decoys=join_decoys)
     base = frame(_client_histories())
-    clean = detect_streams(base)
+    clean = detect_streams(base, params=params)
     assert len(clean) == 7
 
     rng = np.random.default_rng(0)
@@ -279,22 +285,22 @@ def test_injecting_decoys_at_test_like_rates_leaves_the_stream_table_unchanged()
                     str(rng.choice(DECOY_MCCS)),
                 )
             )
-    # decoys that exactly shadow a stream's amount, MCC and cadence
+    # decoys that exactly shadow a stream's amount, MCC and cadence, a day or two beside its payments
     decoys += series("C1", "merchant charge", "7997", 66, "2025-06-06", 3)
     decoys += series("C2", "digital order", "4814", 47, "2025-12-01", 2)
     noisy = pd.concat([base, frame(decoys)], ignore_index=True).sample(frac=1, random_state=1)
-    pd.testing.assert_frame_equal(detect_streams(noisy), clean)
+    pd.testing.assert_frame_equal(detect_streams(noisy, params=params), clean)
 
 
-# (client, home MCC, amount, first payment) of every stream in `_client_histories`
+# (client, home MCC, amount, first payment, period in days) of every stream in `_client_histories`
 _HISTORY_STREAMS = [
-    ("C1", "7997", 66, "2025-06-05"),
-    ("C1", "5812", 17.9, "2025-03-10"),
-    ("C2", "4814", 47, "2025-01-20"),
-    ("C2", "5732", 6.8, "2025-09-02"),
-    ("C2", "6300", 109, "2025-02-11"),
-    ("C3", "5734", 39, "2025-10-01"),
-    ("C3", "5812", 13.5, "2025-04-01"),
+    ("C1", "7997", 66, "2025-06-05", 30),
+    ("C1", "5812", 17.9, "2025-03-10", 30),
+    ("C2", "4814", 47, "2025-01-20", 30),
+    ("C2", "5732", 6.8, "2025-09-02", 30),
+    ("C2", "6300", 109, "2025-02-11", 30),
+    ("C3", "5734", 39, "2025-10-01", 30),
+    ("C3", "5812", 13.5, "2025-04-01", 14),
 ]
 
 
@@ -307,22 +313,35 @@ _HISTORY_STREAMS = [
         ("card purchase", ["card purchase", "pay card purchase", "card purchase digital"]),
     ],
 )
-def test_every_decoy_pattern_is_excluded_even_when_it_shadows_a_stream(pattern, variants):
+@pytest.mark.parametrize("join_decoys", [False, True])
+def test_every_decoy_pattern_is_excluded_even_when_it_shadows_a_stream(pattern, variants, join_decoys):
     # The worst case for each Decoy Transaction pattern: its noised variants on every stream's home MCC,
-    # at that stream's exact amount, between its payments. Filler Descriptions in the same spot would join.
+    # at that stream's exact amount, half a period off its schedule between its payments; and at another
+    # amount on the empty slot one period before its first payment. With `join_decoys` a Decoy joins only
+    # on an empty slot at the stream's amount (ticket 12), so neither joins. Filler Descriptions in the
+    # first spot would join.
+    params = StreamParams(join_decoys=join_decoys)
     base = frame(_client_histories())
-    clean = detect_streams(base)
-    decoys = [
-        tx(client, pd.Timestamp(first) + (10 + 30 * k) * DAY, amount, variants[k % len(variants)], mcc)
-        for client, mcc, amount, first in _HISTORY_STREAMS
+    clean = detect_streams(base, params=params)
+    off_schedule = [
+        tx(client, pd.Timestamp(first) + (period / 2 + period * k) * DAY, amount, variants[k % len(variants)], mcc)
+        for client, mcc, amount, first, period in _HISTORY_STREAMS
         for k in range(3)
     ]
-    noisy = pd.concat([base, frame(decoys)], ignore_index=True)
-    pd.testing.assert_frame_equal(detect_streams(noisy), clean)
+    off_amount = [
+        tx(client, pd.Timestamp(first) - period * DAY, amount * np.exp(2 * TOLERANCE), variants[0], mcc)
+        for client, mcc, amount, first, period in _HISTORY_STREAMS
+    ]
+    noisy = pd.concat([base, frame(off_schedule + off_amount)], ignore_index=True)
+    pd.testing.assert_frame_equal(detect_streams(noisy, params=params), clean)
 
     # control: the same rows with a Filler Description do change the table
-    fillers = frame([{**d, "description": "subscription charge"} for d in decoys])
-    assert not detect_streams(pd.concat([base, fillers], ignore_index=True)).equals(clean)
+    fillers = frame([{**d, "description": "subscription charge"} for d in off_schedule])
+    assert not detect_streams(pd.concat([base, fillers], ignore_index=True), params=params).equals(clean)
+    # and with `join_decoys`, a Decoy at the stream's amount on that empty slot joins
+    on_slot = frame([{**d, "amount": amount} for d, (_, _, amount, _, _) in zip(off_amount, _HISTORY_STREAMS)])
+    joined = detect_streams(pd.concat([base, on_slot], ignore_index=True), params=params)
+    assert joined.equals(clean) != join_decoys
 
 
 # --- Cutoff -------------------------------------------------------------------
@@ -810,9 +829,6 @@ def test_a_filler_payment_on_another_mcc_joins_a_stream_whose_amount_and_schedul
         ("member plan", "5411", 47, "2025-08-10"),  # off the schedule
         ("member plan", "5411", 47, "2025-07-06"),  # beside a payment it would duplicate
         ("member plan", "5411", 47, "2025-12-31"),  # two periods after the last payment
-        ("merchant charge", "5411", 47, "2025-08-03"),  # Decoy Transactions
-        ("digital order", "5734", 47, "2025-08-03"),
-        ("service payment", "4814", 47, "2025-08-03"),
         ("grocery store", "5411", 47, "2025-08-03"),  # a shop payment
         ("service fee", "6012", 47, "2025-08-03"),  # a fee
         ("gym membership", "5411", 47, "2025-08-03"),  # it names another family
@@ -820,6 +836,13 @@ def test_a_filler_payment_on_another_mcc_joins_a_stream_whose_amount_and_schedul
 )
 def test_a_payment_at_another_amount_off_the_schedule_or_that_is_no_filler_never_joins(description, mcc, amount, when):
     assert _joins(description, mcc, amount, when) == 0
+
+
+@pytest.mark.parametrize(
+    "description, mcc", [("merchant charge", "5411"), ("digital order", "5734"), ("service payment", "4814")]
+)
+def test_without_join_decoys_a_decoy_transaction_never_joins_even_on_the_schedule(description, mcc):
+    assert _joins(description, mcc, 47, "2025-08-03", StreamParams(join_decoys=False)) == 0
 
 
 def test_the_schedule_tolerance_is_a_parameter():
@@ -866,6 +889,90 @@ def test_a_series_of_stray_payments_at_another_amount_stays_out_of_a_stream():
     hidden += series("C1", "digital service", "5812", 60, "2025-04-05", 8)
     s = one(detect_streams(frame(stream + hidden)))
     assert (s.n_payments, s.median_amount) == (8, 47)
+
+
+# --- Decoy-described payments on a stream's schedule --------------------------------
+# Valid and test also book some stream payments with a Decoy description ("digital order", "merchant
+# charge"). With `join_decoys` such a payment joins under the Stray Payment rules: an empty slot of the
+# schedule, the stream's amount, a stream of two or more payments. It never starts a stream.
+
+DECOYS_ON = StreamParams(join_decoys=True)
+
+
+@pytest.mark.parametrize(
+    "description, mcc, amount, when",
+    [
+        ("merchant charge", "5411", 47, "2025-08-03"),  # in the gap
+        ("digital order", "5734", 47, "2025-08-05"),  # two days late, on another family's home MCC
+        ("pay dgtl order online", "4814", 47 * np.exp(0.9 * TOLERANCE), "2025-08-03"),
+        ("service payment", "5812", 47, "2025-12-01"),  # one period after the last payment
+        ("card purchase", "5411", 47, "2025-03-06"),  # one period before the first
+    ],
+)
+def test_a_decoy_described_payment_on_an_empty_slot_at_the_streams_amount_joins(description, mcc, amount, when):
+    assert _joins(description, mcc, amount, when, DECOYS_ON) == 1
+
+
+@pytest.mark.parametrize(
+    "description, mcc, amount, when",
+    [
+        ("merchant charge", "5411", 47 * np.exp(1.1 * TOLERANCE), "2025-08-03"),  # another amount
+        ("digital order", "4814", 30, "2025-08-03"),
+        ("merchant charge", "5411", 47, "2025-08-10"),  # off the schedule
+        ("merchant charge", "5411", 47, "2025-08-18"),  # half a period off
+        ("digital order", "4814", 47, "2025-07-06"),  # beside a payment it would duplicate
+        ("card purchase", "5411", 47, "2025-12-31"),  # two periods after the last payment
+        ("payment fee", "4814", 47, "2025-08-03"),  # a fee with a Decoy word
+        ("marketplace order", "5411", 47, "2025-08-03"),  # a shop payment with a Decoy word
+    ],
+)
+def test_a_decoy_described_payment_off_the_schedule_or_amount_never_joins(description, mcc, amount, when):
+    assert _joins(description, mcc, amount, when, DECOYS_ON) == 0
+
+
+def test_decoy_described_payments_never_start_a_stream_nor_join_one_of_a_single_payment():
+    rows = series("C1", "merchant charge", "4814", 47, "2025-04-05", 8)
+    rows += series("C1", "digital order", "5734", 25, "2025-04-07", 8)
+    assert detect_streams(frame(rows), params=DECOYS_ON).empty
+    s = one(detect_streams(frame(rows + [tx("C1", "2025-09-02", 47, "phone contract", "4814")]), params=DECOYS_ON))
+    assert (s.family, s.n_payments) == ("mobile", 1)
+
+
+def test_joining_decoys_needs_the_stray_payment_join():
+    assert _joins("merchant charge", "5411", 47, "2025-08-03", StreamParams(join_strays=False, join_decoys=True)) == 0
+
+
+def test_a_stray_payment_takes_an_empty_slot_before_a_decoy_described_payment():
+    rows = series("C1", "phone contract", "4814", 47, "2025-04-05", 8)
+    del rows[4]
+    rows += [tx("C1", "2025-08-02", 47.5, "merchant charge", "5411"), tx("C1", "2025-08-04", 47.2, "member plan", "5411")]
+    _, paid = detect_stream_payments(frame(rows), params=DECOYS_ON)
+    assert len(paid) == 8 and 47.2 in set(paid["amount"]) and 47.5 not in set(paid["amount"])
+
+
+def test_random_decoy_transactions_rarely_join_a_stream():
+    # 300 monthly streams that each missed two payments, and Decoy Transactions at test-like rates on
+    # random days around them, all at the stream's exact amount (the worst case for amount). Only a Decoy
+    # that lands within the schedule tolerance of an empty slot joins, as in the real-data control.
+    rng = np.random.default_rng(0)
+    rows, n_decoys = [], 0
+    for c in range(300):
+        client = f"C{c:03d}"
+        stream = series(client, "phone contract", "4814", 47, "2025-01-10", 12)
+        for k in sorted(rng.choice(np.arange(1, 11), size=2, replace=False), reverse=True):
+            del stream[k]
+        rows += stream
+        for _ in range(rng.poisson(4.5)):
+            when = pd.Timestamp("2024-12-01") + int(rng.integers(0, 395)) * DAY
+            rows.append(tx(client, when, 47, str(rng.choice(DECOYS)), str(rng.choice(DECOY_MCCS))))
+            n_decoys += 1
+    clean = detect_streams(frame([r for r in rows if r["description"] == "phone contract"]), params=DECOYS_ON)
+    joined = detect_streams(frame(rows), params=DECOYS_ON)["n_payments"].sum() - clean["n_payments"].sum()
+    assert 0 < joined / n_decoys < 0.1
+    # at another amount none joins, and without join_decoys none joins at all
+    off = frame([r if r["description"] == "phone contract" else {**r, "amount": 30.0} for r in rows])
+    pd.testing.assert_frame_equal(detect_streams(off, params=DECOYS_ON), clean)
+    pd.testing.assert_frame_equal(detect_streams(frame(rows), params=StreamParams(join_decoys=False)), clean)
 
 
 # --- Pseudo-Labels at a Shifted Cutoff -------------------------------------------
@@ -1047,9 +1154,13 @@ def _horizon_histories():
 _HORIZON_LABELS = {"C1": "gym", "C2": "insurance", "C3": "software", "C4": "none"}
 
 
-def test_injecting_decoys_leaves_every_pseudo_label_unchanged():
+@pytest.mark.parametrize("join_decoys", [False, True])
+def test_injecting_decoys_leaves_every_pseudo_label_unchanged(join_decoys):
+    # with `join_decoys` (ticket 12) a Decoy joins only on an empty slot at a stream's amount: the random
+    # Decoys here miss every one, and the shadows sit off their streams' schedules
+    params = StreamParams(join_decoys=join_decoys)
     base = history(_horizon_histories())
-    assert pseudo_labels(base, SHIFTED).to_dict() == _HORIZON_LABELS
+    assert pseudo_labels(base, SHIFTED, params=params).to_dict() == _HORIZON_LABELS
 
     rng = np.random.default_rng(0)
     decoys = []
@@ -1077,11 +1188,11 @@ def test_injecting_decoys_leaves_every_pseudo_label_unchanged():
     ]
     decoys += shadows
     noisy = pd.concat([base, history(decoys)], ignore_index=True).sample(frac=1, random_state=1)
-    pd.testing.assert_series_equal(pseudo_labels(noisy, SHIFTED), pseudo_labels(base, SHIFTED))
+    pd.testing.assert_series_equal(pseudo_labels(noisy, SHIFTED, params=params), pseudo_labels(base, SHIFTED, params=params))
 
     # control: the same shadows with a Filler Description join a stream and do move labels
     fillers = history([{**d, "description": "subscription charge"} for d in shadows])
-    moved = pseudo_labels(pd.concat([base, fillers], ignore_index=True), SHIFTED)
+    moved = pseudo_labels(pd.concat([base, fillers], ignore_index=True), SHIFTED, params=params)
     assert moved["C1"] == "streaming" and moved["C2"] == "cloud"
 
 
