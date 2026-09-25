@@ -1,6 +1,6 @@
 # 20: Do sociological churn mechanisms predict `none`? (pre-registered diagnostic)
 
-Status: ready-for-agent
+Status: done
 
 **Why:** the user asked whether sociology could improve our `none` signal. The churn literature names mechanisms we have not tested as such:
 - financial stress cuts discretionary spending first;
@@ -51,4 +51,55 @@ Per Client, from history before the Cutoff (2026-01-01):
 
 ## Result
 
-(to fill)
+**Gate failed on both samples, so the sociological route is closed.** The details are in `experiments/analysis/sociology/findings.md` and `results.json`.
+
+**Base against base + 6** (standardised logistic regression, L2, C = 1; 5×5 CV, out-of-fold averaged):
+
+| sample | base AUC | base + 6 AUC | paired DeLong diff | 95% CI |
+|---|---|---|---|---|
+| train (2,000; 597 none) | 0.9079 | 0.9060 | −0.0019 | [−0.0058, +0.0020] |
+| selection (700; 205 none) | 0.8769 | 0.8563 | −0.0207 | [−0.0363, −0.0050] |
+
+On train there is no gain. On selection, base + 6 is significantly *worse*.
+
+**Standalone AUCs, in the predicted direction (train / selection):**
+
+| feature | train | selection |
+|---|---|---|
+| income_trend | 0.512 | 0.476 |
+| spend_contraction | 0.457 | 0.459 |
+| essential_share | 0.519 | 0.566 |
+| price_rise | 0.418 | 0.371 |
+| discretionary_share | 0.403 | 0.388 |
+| recent_stops | 0.571 | 0.527 |
+
+- **`spend_contraction`:** the sign is wrong on both samples; growing spend goes with `none`.
+- **`price_rise` and `discretionary_share`:** both point the wrong way. They are 0 without Active Streams, so they mostly restate "has Active Streams", which the base already carries.
+
+**Coefficient signs against the prediction:**
+
+- `recent_stops` matches on both samples.
+- `spend_contraction` is wrong on both.
+- The other four flip between train and selection.
+
+**Adversarial AUC** (train vs test):
+
+| feature | AUC |
+|---|---|
+| income_trend | 0.507 |
+| spend_contraction | 0.501 |
+| essential_share | 0.519 |
+| price_rise | 0.564 |
+| discretionary_share | 0.533 |
+| recent_stops | 0.605 |
+| all six | 0.653 |
+
+Selection vs test is 0.514 for all six. The one feature that helps on train, `recent_stops`, is also the one that shifts most: it averages 0.49 on train against 0.20 on test.
+
+**Deviations and choices, fixed before any label was read:**
+
+- The inbound top-up type exists (`topup`, "salary"), so `income_trend` has no deviation.
+- Telecom (4814) is not counted as a utility.
+- `recent_stops` counts only lapsed streams with at least 3 payments.
+- The empty-set features are 0.
+- The base is clipped to [1e-6, 1 − 1e-6] before the logit.

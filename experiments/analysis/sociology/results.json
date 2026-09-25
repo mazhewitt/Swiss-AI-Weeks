@@ -1,0 +1,391 @@
+{
+ "design": {
+  "model": "standardised logistic regression, L2, C=1; base only vs base + 6",
+  "cv": "5 repeats x 5-fold stratified, seeds 0-4, oof averaged",
+  "base": "logit of the mean of hail mary v2 and surv train-only P(none)",
+  "gate": "diff >= 0.01 and paired DeLong 95% CI excludes 0, on train and selection"
+ },
+ "train": {
+  "n": {
+   "clients": 2000,
+   "none": 597
+  },
+  "base_raw_auc": {
+   "auc": 0.9083,
+   "ci95": [
+    0.8947,
+    0.9219
+   ],
+   "p_vs_0.5": 0.0
+  },
+  "base_lr": {
+   "auc": 0.9079,
+   "ci95": [
+    0.8942,
+    0.9215
+   ],
+   "p_vs_0.5": 0.0,
+   "per_repeat_auc": [
+    0.9074,
+    0.9081,
+    0.9081,
+    0.9081,
+    0.9075
+   ]
+  },
+  "base_plus_6_lr": {
+   "auc": 0.906,
+   "ci95": [
+    0.8919,
+    0.92
+   ],
+   "p_vs_0.5": 0.0,
+   "per_repeat_auc": [
+    0.9055,
+    0.9061,
+    0.9047,
+    0.9057,
+    0.906
+   ]
+  },
+  "paired_delong_base_plus_6_vs_base": {
+   "auc_new": 0.906,
+   "auc_old": 0.9079,
+   "diff": -0.0019,
+   "ci95": [
+    -0.0058,
+    0.002
+   ],
+   "z": -0.94,
+   "p_two_sided": 0.3471689224282447
+  },
+  "coefficients_standardised": {
+   "base": {
+    "coef_full_fit": 2.7278,
+    "coef_fold_mean": 2.7211,
+    "fold_share_positive": 1.0
+   },
+   "income_trend": {
+    "coef_full_fit": -0.0313,
+    "coef_fold_mean": -0.0314,
+    "fold_share_positive": 0.2,
+    "predicted_sign": "-",
+    "matches_prediction": true
+   },
+   "spend_contraction": {
+    "coef_full_fit": 0.2232,
+    "coef_fold_mean": 0.2233,
+    "fold_share_positive": 1.0,
+    "predicted_sign": "-",
+    "matches_prediction": false
+   },
+   "essential_share": {
+    "coef_full_fit": -0.0086,
+    "coef_fold_mean": -0.0079,
+    "fold_share_positive": 0.4,
+    "predicted_sign": "+",
+    "matches_prediction": false
+   },
+   "price_rise": {
+    "coef_full_fit": 0.0404,
+    "coef_fold_mean": 0.0401,
+    "fold_share_positive": 0.92,
+    "predicted_sign": "+",
+    "matches_prediction": true
+   },
+   "discretionary_share": {
+    "coef_full_fit": 0.036,
+    "coef_fold_mean": 0.0353,
+    "fold_share_positive": 1.0,
+    "predicted_sign": "+",
+    "matches_prediction": true
+   },
+   "recent_stops": {
+    "coef_full_fit": 0.2189,
+    "coef_fold_mean": 0.2193,
+    "fold_share_positive": 1.0,
+    "predicted_sign": "+",
+    "matches_prediction": true
+   }
+  },
+  "standalone_auc": {
+   "income_trend": {
+    "auc_high_to_none": 0.4878,
+    "ci95": [
+     0.4604,
+     0.5151
+    ],
+    "auc_predicted_direction": 0.5122,
+    "mean_none": -2.2145,
+    "mean_family": -2.0471
+   },
+   "spend_contraction": {
+    "auc_high_to_none": 0.5429,
+    "ci95": [
+     0.5144,
+     0.5714
+    ],
+    "auc_predicted_direction": 0.4571,
+    "mean_none": 0.109,
+    "mean_family": 0.0137
+   },
+   "essential_share": {
+    "auc_high_to_none": 0.5185,
+    "ci95": [
+     0.4904,
+     0.5465
+    ],
+    "auc_predicted_direction": 0.5185,
+    "mean_none": 0.2254,
+    "mean_family": 0.2104
+   },
+   "price_rise": {
+    "auc_high_to_none": 0.4176,
+    "ci95": [
+     0.3899,
+     0.4453
+    ],
+    "auc_predicted_direction": 0.4176,
+    "mean_none": 0.0098,
+    "mean_family": 0.0115
+   },
+   "discretionary_share": {
+    "auc_high_to_none": 0.4028,
+    "ci95": [
+     0.3768,
+     0.4287
+    ],
+    "auc_predicted_direction": 0.4028,
+    "mean_none": 0.2785,
+    "mean_family": 0.4015
+   },
+   "recent_stops": {
+    "auc_high_to_none": 0.5707,
+    "ci95": [
+     0.5462,
+     0.5951
+    ],
+    "auc_predicted_direction": 0.5707,
+    "mean_none": 0.6549,
+    "mean_family": 0.4227
+   }
+  }
+ },
+ "selection": {
+  "n": {
+   "clients": 700,
+   "none": 205
+  },
+  "base_raw_auc": {
+   "auc": 0.8779,
+   "ci95": [
+    0.8511,
+    0.9047
+   ],
+   "p_vs_0.5": 4.962999200894877e-168
+  },
+  "base_lr": {
+   "auc": 0.8769,
+   "ci95": [
+    0.85,
+    0.9039
+   ],
+   "p_vs_0.5": 7.599702967407186e-166,
+   "per_repeat_auc": [
+    0.8761,
+    0.8776,
+    0.8751,
+    0.8766,
+    0.8767
+   ]
+  },
+  "base_plus_6_lr": {
+   "auc": 0.8563,
+   "ci95": [
+    0.8263,
+    0.8862
+   ],
+   "p_vs_0.5": 5.192630360931125e-120,
+   "per_repeat_auc": [
+    0.8537,
+    0.8604,
+    0.8459,
+    0.8552,
+    0.85
+   ]
+  },
+  "paired_delong_base_plus_6_vs_base": {
+   "auc_new": 0.8563,
+   "auc_old": 0.8769,
+   "diff": -0.0207,
+   "ci95": [
+    -0.0363,
+    -0.005
+   ],
+   "z": -2.589,
+   "p_two_sided": 0.009630727902163103
+  },
+  "coefficients_standardised": {
+   "base": {
+    "coef_full_fit": 1.6644,
+    "coef_fold_mean": 1.6508,
+    "fold_share_positive": 1.0
+   },
+   "income_trend": {
+    "coef_full_fit": 0.1473,
+    "coef_fold_mean": 0.1458,
+    "fold_share_positive": 1.0,
+    "predicted_sign": "-",
+    "matches_prediction": false
+   },
+   "spend_contraction": {
+    "coef_full_fit": 0.3152,
+    "coef_fold_mean": 0.3157,
+    "fold_share_positive": 1.0,
+    "predicted_sign": "-",
+    "matches_prediction": false
+   },
+   "essential_share": {
+    "coef_full_fit": 0.1629,
+    "coef_fold_mean": 0.1636,
+    "fold_share_positive": 1.0,
+    "predicted_sign": "+",
+    "matches_prediction": true
+   },
+   "price_rise": {
+    "coef_full_fit": -0.0327,
+    "coef_fold_mean": -0.0377,
+    "fold_share_positive": 0.24,
+    "predicted_sign": "+",
+    "matches_prediction": false
+   },
+   "discretionary_share": {
+    "coef_full_fit": -0.0358,
+    "coef_fold_mean": -0.0382,
+    "fold_share_positive": 0.28,
+    "predicted_sign": "+",
+    "matches_prediction": false
+   },
+   "recent_stops": {
+    "coef_full_fit": 0.1144,
+    "coef_fold_mean": 0.1152,
+    "fold_share_positive": 1.0,
+    "predicted_sign": "+",
+    "matches_prediction": true
+   }
+  },
+  "standalone_auc": {
+   "income_trend": {
+    "auc_high_to_none": 0.5237,
+    "ci95": [
+     0.4766,
+     0.5709
+    ],
+    "auc_predicted_direction": 0.4763,
+    "mean_none": -2.118,
+    "mean_family": -2.3462
+   },
+   "spend_contraction": {
+    "auc_high_to_none": 0.5414,
+    "ci95": [
+     0.4943,
+     0.5884
+    ],
+    "auc_predicted_direction": 0.4586,
+    "mean_none": 0.0931,
+    "mean_family": 0.019
+   },
+   "essential_share": {
+    "auc_high_to_none": 0.5661,
+    "ci95": [
+     0.5188,
+     0.6133
+    ],
+    "auc_predicted_direction": 0.5661,
+    "mean_none": 0.2228,
+    "mean_family": 0.1936
+   },
+   "price_rise": {
+    "auc_high_to_none": 0.3707,
+    "ci95": [
+     0.3285,
+     0.4128
+    ],
+    "auc_predicted_direction": 0.3707,
+    "mean_none": 0.0047,
+    "mean_family": 0.0074
+   },
+   "discretionary_share": {
+    "auc_high_to_none": 0.3876,
+    "ci95": [
+     0.3433,
+     0.432
+    ],
+    "auc_predicted_direction": 0.3876,
+    "mean_none": 0.2626,
+    "mean_family": 0.4025
+   },
+   "recent_stops": {
+    "auc_high_to_none": 0.5269,
+    "ci95": [
+     0.4935,
+     0.5603
+    ],
+    "auc_predicted_direction": 0.5269,
+    "mean_none": 0.2634,
+    "mean_family": 0.1899
+   }
+  }
+ },
+ "adversarial_auc": {
+  "train_vs_test": {
+   "income_trend": 0.5068,
+   "spend_contraction": 0.5007,
+   "essential_share": 0.5185,
+   "price_rise": 0.5642,
+   "discretionary_share": 0.5326,
+   "recent_stops": 0.6045,
+   "all_six_lr_oof": 0.6534
+  },
+  "selection_vs_test": {
+   "income_trend": 0.5151,
+   "spend_contraction": 0.5001,
+   "essential_share": 0.5025,
+   "price_rise": 0.5077,
+   "discretionary_share": 0.5272,
+   "recent_stops": 0.504,
+   "all_six_lr_oof": 0.5136
+  },
+  "train_vs_selection": {
+   "income_trend": 0.5085,
+   "spend_contraction": 0.5009,
+   "essential_share": 0.5214,
+   "price_rise": 0.5571,
+   "discretionary_share": 0.5045,
+   "recent_stops": 0.6006,
+   "all_six_lr_oof": 0.6401
+  }
+ },
+ "gate": {
+  "train": {
+   "diff": -0.0019,
+   "ci95": [
+    -0.0058,
+    0.002
+   ],
+   "diff_ok": false,
+   "ci_excludes_0": false
+  },
+  "selection": {
+   "diff": -0.0207,
+   "ci95": [
+    -0.0363,
+    -0.005
+   ],
+   "diff_ok": false,
+   "ci_excludes_0": false
+  },
+  "passed": false,
+  "verdict": "close the sociological route"
+ }
+}
