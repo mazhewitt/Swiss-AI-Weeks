@@ -104,4 +104,12 @@ qualify: d > 0, disagreement ≥ 10%). By d̃: hail mary A −0.0076, N −0.010
 - **Open (non-blocking):**
   - **Extra optimism:** N's selection P' averages 5 models fitted on 560 Clients each, while test gets one model fitted on 700. This may flatter N's selection score slightly. It changes no choice, since N ranks below B+E3.
   - **Untested rebuild path:** if ticket 18's git-ignored raw caches are missing, `none_stack.py` rebuilds them from `hm.target` and the sample submission rather than ticket 18's inputs. By reading the code these give the same rows, and shape and column asserts guard them, but the path has not been run.
-- **Leakage and regression:** see below.
+- **Leakage and regression (one critic):** none blocking.
+  - Selection labels are read only inside `training_run(with_selection=True)` (the nested CV and the final fit) and once in `data.scoring()`.
+  - The predictions and code are unchanged since the freeze commit, 3c1d818.
+  - Ticket 18's caches hold only the selection and test Clients. A fresh rebuild through the fallback path equals them exactly, which closes the rebuild note above.
+  - No `src/` changes; pytest 538 passed; both submission files pass `rf submit --check`.
+  - Open (minor):
+    - the predict stage writes the selection `none` count (205) to `results.json` before scoring. It has no effect on the predictions.
+    - `features.py` reuses its pickle cache without a key check.
+    - `data.valid_split`'s unguarded read of the valid labels to stratify the split (older code, also noted in ticket 17).
