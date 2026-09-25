@@ -1,0 +1,351 @@
+{
+ "gate_a": {
+  "rule": "pass if pooled realised D >= pooled nested E3 - 0.01 (train out-of-fold, S's probabilities)",
+  "nested_e3_macro_f1": 0.6384,
+  "d_macro_f1": 0.6454,
+  "d_minus_e3": 0.007,
+  "passed": true,
+  "folds": [
+   {
+    "fold": 0,
+    "n": 400,
+    "nested_e3": 0.6287,
+    "d": 0.6375,
+    "d_expected": 0.6027,
+    "e3_decision": {
+     "weights": {
+      "cloud": 1.189207115002721,
+      "gym": 0.8408964152537145,
+      "insurance": 1.0,
+      "mobile": 1.4142135623730951,
+      "music": 1.0,
+      "software": 0.8408964152537145,
+      "streaming": 1.4142135623730951,
+      "none": 1.0
+     },
+     "none_threshold": null
+    },
+    "d_decision": {
+     "weights": {
+      "cloud": 1.189207115002721,
+      "gym": 1.189207115002721,
+      "insurance": 1.189207115002721,
+      "mobile": 1.189207115002721,
+      "music": 1.189207115002721,
+      "software": 1.189207115002721,
+      "streaming": 1.0,
+      "none": 0.8408964152537145
+     },
+     "none_threshold": null
+    }
+   },
+   {
+    "fold": 1,
+    "n": 400,
+    "nested_e3": 0.6539,
+    "d": 0.6475,
+    "d_expected": 0.5976,
+    "e3_decision": {
+     "weights": {
+      "cloud": 1.0,
+      "gym": 0.8408964152537145,
+      "insurance": 0.8408964152537145,
+      "mobile": 1.4142135623730951,
+      "music": 1.0,
+      "software": 0.8408964152537145,
+      "streaming": 1.4142135623730951,
+      "none": 1.0
+     },
+     "none_threshold": 0.52
+    },
+    "d_decision": {
+     "weights": {
+      "cloud": 1.0,
+      "gym": 1.0,
+      "insurance": 1.0,
+      "mobile": 1.0,
+      "music": 1.189207115002721,
+      "software": 1.0,
+      "streaming": 1.0,
+      "none": 0.7071067811865476
+     },
+     "none_threshold": null
+    }
+   },
+   {
+    "fold": 2,
+    "n": 400,
+    "nested_e3": 0.6111,
+    "d": 0.6371,
+    "d_expected": 0.5893,
+    "e3_decision": {
+     "weights": {
+      "cloud": 1.0,
+      "gym": 0.5946035575013605,
+      "insurance": 0.8408964152537145,
+      "mobile": 1.4142135623730951,
+      "music": 1.0,
+      "software": 0.8408964152537145,
+      "streaming": 1.0,
+      "none": 1.0
+     },
+     "none_threshold": 0.63
+    },
+    "d_decision": {
+     "weights": {
+      "cloud": 1.189207115002721,
+      "gym": 1.189207115002721,
+      "insurance": 1.189207115002721,
+      "mobile": 1.189207115002721,
+      "music": 1.189207115002721,
+      "software": 1.189207115002721,
+      "streaming": 1.189207115002721,
+      "none": 0.8408964152537145
+     },
+     "none_threshold": null
+    }
+   },
+   {
+    "fold": 3,
+    "n": 400,
+    "nested_e3": 0.6369,
+    "d": 0.6389,
+    "d_expected": 0.6049,
+    "e3_decision": {
+     "weights": {
+      "cloud": 1.189207115002721,
+      "gym": 0.8408964152537145,
+      "insurance": 1.0,
+      "mobile": 1.0,
+      "music": 1.0,
+      "software": 0.8408964152537145,
+      "streaming": 1.4142135623730951,
+      "none": 1.0
+     },
+     "none_threshold": null
+    },
+    "d_decision": {
+     "weights": {
+      "cloud": 1.0,
+      "gym": 0.8408964152537145,
+      "insurance": 1.0,
+      "mobile": 1.0,
+      "music": 1.0,
+      "software": 1.0,
+      "streaming": 1.0,
+      "none": 0.7071067811865476
+     },
+     "none_threshold": null
+    }
+   },
+   {
+    "fold": 4,
+    "n": 400,
+    "nested_e3": 0.6565,
+    "d": 0.6635,
+    "d_expected": 0.5985,
+    "e3_decision": {
+     "weights": {
+      "cloud": 1.189207115002721,
+      "gym": 0.8408964152537145,
+      "insurance": 0.8408964152537145,
+      "mobile": 1.4142135623730951,
+      "music": 1.0,
+      "software": 1.0,
+      "streaming": 1.0,
+      "none": 1.0
+     },
+     "none_threshold": 0.59
+    },
+    "d_decision": {
+     "weights": {
+      "cloud": 1.189207115002721,
+      "gym": 1.0,
+      "insurance": 1.0,
+      "mobile": 1.0,
+      "music": 1.0,
+      "software": 1.0,
+      "streaming": 1.0,
+      "none": 0.7071067811865476
+     },
+     "none_threshold": null
+    }
+   }
+  ],
+  "p_none_reliability": [
+   {
+    "decile": 1,
+    "n": 200,
+    "p_low": 0.01,
+    "p_high": 0.0429,
+    "mean_p_none": 0.0308,
+    "observed_none": 0.0
+   },
+   {
+    "decile": 2,
+    "n": 200,
+    "p_low": 0.043,
+    "p_high": 0.0716,
+    "mean_p_none": 0.0566,
+    "observed_none": 0.0
+   },
+   {
+    "decile": 3,
+    "n": 200,
+    "p_low": 0.0717,
+    "p_high": 0.1001,
+    "mean_p_none": 0.0854,
+    "observed_none": 0.045
+   },
+   {
+    "decile": 4,
+    "n": 200,
+    "p_low": 0.1004,
+    "p_high": 0.136,
+    "mean_p_none": 0.1168,
+    "observed_none": 0.075
+   },
+   {
+    "decile": 5,
+    "n": 200,
+    "p_low": 0.1364,
+    "p_high": 0.1805,
+    "mean_p_none": 0.1576,
+    "observed_none": 0.11
+   },
+   {
+    "decile": 6,
+    "n": 200,
+    "p_low": 0.1805,
+    "p_high": 0.254,
+    "mean_p_none": 0.2136,
+    "observed_none": 0.18
+   },
+   {
+    "decile": 7,
+    "n": 200,
+    "p_low": 0.2544,
+    "p_high": 0.3587,
+    "mean_p_none": 0.2975,
+    "observed_none": 0.305
+   },
+   {
+    "decile": 8,
+    "n": 200,
+    "p_low": 0.3587,
+    "p_high": 0.6015,
+    "mean_p_none": 0.4689,
+    "observed_none": 0.585
+   },
+   {
+    "decile": 9,
+    "n": 200,
+    "p_low": 0.6032,
+    "p_high": 0.8513,
+    "mean_p_none": 0.745,
+    "observed_none": 0.795
+   },
+   {
+    "decile": 10,
+    "n": 200,
+    "p_low": 0.853,
+    "p_high": 1.0,
+    "mean_p_none": 0.927,
+    "observed_none": 0.89
+   }
+  ],
+  "none_share": {
+   "true": 0.2985,
+   "nested_e3": 0.271,
+   "d": 0.2395
+  }
+ },
+ "rehearsal_decisions": {
+  "S_e3": {
+   "weights": {
+    "cloud": 1.189207115002721,
+    "gym": 0.8408964152537145,
+    "insurance": 0.8408964152537145,
+    "mobile": 1.4142135623730951,
+    "music": 1.0,
+    "software": 0.8408964152537145,
+    "streaming": 1.4142135623730951,
+    "none": 1.0
+   },
+   "none_threshold": 0.52
+  },
+  "S_D": {
+   "weights": {
+    "cloud": 1.189207115002721,
+    "gym": 1.0,
+    "insurance": 1.0,
+    "mobile": 1.189207115002721,
+    "music": 1.189207115002721,
+    "software": 1.189207115002721,
+    "streaming": 1.189207115002721,
+    "none": 0.8408964152537145
+   },
+   "none_threshold": null,
+   "argmax_expected_macro_f1": 0.6158,
+   "expected_macro_f1": 0.6175
+  }
+ },
+ "final": {
+  "decisions": {
+   "S_e3": {
+    "weights": {
+     "cloud": 1.681792830507429,
+     "gym": 1.189207115002721,
+     "insurance": 1.4142135623730951,
+     "mobile": 1.681792830507429,
+     "music": 1.189207115002721,
+     "software": 1.0,
+     "streaming": 1.189207115002721,
+     "none": 1.0
+    },
+    "none_threshold": null
+   },
+   "S_D": {
+    "weights": {
+     "cloud": 1.0,
+     "gym": 1.0,
+     "insurance": 1.0,
+     "mobile": 1.0,
+     "music": 1.189207115002721,
+     "software": 1.0,
+     "streaming": 1.189207115002721,
+     "none": 0.8408964152537145
+    },
+    "none_threshold": null,
+    "argmax_expected_macro_f1": 0.6245,
+    "expected_macro_f1": 0.6257
+   }
+  },
+  "single_model_test_file_agreement": {
+   "v2 alone vs day2_final_ranker_none_v2.csv": 1.0,
+   "soft alone vs day2_final_survival_soft.csv": 1.0
+  },
+  "label_mix": {
+   "S": {
+    "none": 227,
+    "mobile": 144,
+    "cloud": 127,
+    "insurance": 118,
+    "gym": 104,
+    "streaming": 99,
+    "software": 94,
+    "music": 87
+   },
+   "S_D": {
+    "none": 231,
+    "mobile": 119,
+    "streaming": 114,
+    "insurance": 112,
+    "cloud": 110,
+    "software": 106,
+    "gym": 105,
+    "music": 103
+   }
+  }
+ }
+}
