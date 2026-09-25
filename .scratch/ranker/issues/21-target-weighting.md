@@ -69,3 +69,25 @@ Code: `experiments/analysis/target_weight/target_weight.py` (imports the hail ma
 - E3 uses only the weight-1 out-of-fold probabilities: in the rehearsal those of train + the other half; in the final the hail mary's `artifacts/hailmary/final/oof_{v2,surv}.csv`, reused. No duplicate enters any cross-validation split.
 - Selection labels: for fitting, read only inside `data.training_run(with_selection=True)`, the held-out half dropped on load (the stratified split itself reads all 700 labels once, inside a training run, as the spec's stratification requires); for scoring, once, in `data.scoring()`. The sealed holdout was never read.
 - The final script is `scripts/day2_final_target_weight.sh`.
+
+## Review
+
+Two critics (leakage; spec, test validity and regression). **None blocking.**
+
+- **Leakage:**
+  - No held-out half's labels reach its predictions. The fit sets hold 2,350 Clients with 0 held-out ids and 0 copies in any out-of-fold file.
+  - No Client's own label reaches it through its copies. `GroupedRanker` keeps a Client and its copies in the same fold of v2's internal `none` cross-fit. SurvivalModel, NoneModel and LightGBM have no internal validation. The stream memo keys on the id plus the content.
+  - The scoring read came after the freeze commit (c8f5e33).
+  - The final file uses train and selection labels only.
+- **Spec and regression:**
+  - The w = 1 fits are byte-identical to the hail mary's configuration A, refitted separately.
+  - Each selection Client is predicted exactly once per weight.
+  - The rule was recomputed from the files: 103 of 1,000 Clients disagree with v2, i.e. 10.3%.
+  - No `src/` changes.
+- **Fixed:** the final script now clears stale outputs and waits on each parallel fit's own exit status. A full rerun reproduced `submissions/day2_final_target_weight.csv` byte for byte and passed `rf submit --check`.
+- **Open (non-blocking):**
+  - **The file this replaces is not configuration A itself.** The committed hail-mary file is the self-training configuration `st_surv_q0.6` (−0.0003 against A on selection), and the w = 3 file differs from it on 3.6% of test Clients.
+  - **The 10% bar is passed by 3 Clients.** The result is deterministic, but a different LightGBM or pandas version could move it.
+  - **Label reads:** `stage_halves` reads all 700 labels to stratify the halves; only ids are written.
+  - **An untested filter:** the other-half restriction rests on one filter with no unit test.
+  - **E2's description-rate KFold is not duplicate-aware.** It is unused here.

@@ -64,6 +64,7 @@ flowchart TB
 | `085645-c70788` | Survival Race, monthly-slot order for single-payment streams | 0.586 | tie |
 | `102231-5456a7` | **Survival Race, soft race order** (ticket 14): the race averaged over uncertain payment dates | **0.599** | tie |
 | (ticket 14) | **Hail mary:** the average of v2 and the Survival Race, with survival-only self-training on the target Clients (best of 6 pre-registered configurations, optimistic) | **0.598** | tie |
+| (ticket 21) | **Hail mary A with the valid Clients weighted 3×** in the refit, cross-fitted over two halves of the selection set (against 0.597 at weight 1) | **0.605** | tie |
 
 **Beyond the selection set** (v2 = `001755-e309a3` refit on train plus the selection set):
 
@@ -72,7 +73,8 @@ flowchart TB
 | v2: ranker + `none` model + Pseudo-Labels | 0.596 | **0.606** |
 | Survival Race | – | 0.594 |
 | Survival Race, soft race order (`submissions/day2_final_survival_soft.csv`) | – | – |
-| Hail mary: v2 + Survival Race average, self-trained (ticket 14, hail mary) | – | (17:30 upload) |
+| Hail mary: v2 + Survival Race average, self-trained (ticket 14, hail mary) | – | – |
+| Hail mary A, valid Clients weighted 3× (ticket 21, `submissions/day2_final_target_weight.csv`) | – | (17:30 upload) |
 
 v2 held up on test, and the drift we feared did not cost it. The Survival Race scored 0.594 on test: 0.012 below v2. That reverses its +0.003 on selection, and both gaps are inside the noise of 700 and 1,000 Clients. The two candidates disagree on 16% of test Clients. Only the best upload counts, so both were uploaded.
 
@@ -94,7 +96,7 @@ On Day 2 another team reached 0.68 on the test leaderboard, against our 0.606. O
 
 Test runs about 0.035 below train, so 0.68 on test needs an extra `none` signal with AUC around 0.97: close to perfect. Picking the wrong stream is a bigger pool in principle (+0.21 if perfect), but our survival probabilities are calibrated, and among streams whose timing is close the order is a coin flip.
 
-**2. What we checked** (tickets 16–20; each pre-registered, reviewed by adversarial critics, and scored on the 700 selection Clients):
+**2. What we checked** (tickets 16–21; each pre-registered, reviewed by adversarial critics, and scored on the 700 selection Clients):
 
 | Idea | Result on selection |
 |---|---|
@@ -107,9 +109,11 @@ Test runs about 0.035 below train, so 0.68 on test needs an extra `none` signal 
 | That signal stacked onto the hail mary (ticket 19) | 0.597 against 0.598: `none` F1 rises from 0.668 to 0.693, but the family labels give back as much. The hail mary's own P(none) already has AUC 0.878 there, and the new features lift it only to 0.893. |
 | Sociological churn mechanisms (ticket 20): income trend, spend contraction, essential share of spending, price rises, discretionary share of streams, recent stops ("subscription audits") | closed: on top of the hail mary's P(none) they add −0.002 `none` AUC on train and **−0.021** on selection (significantly worse). Only recent stops points the predicted way on both samples, and it shifts between train and test; growing spend, not shrinking, goes with `none` |
 
+**The one lever that moved:** weighting the valid-like Clients 3× in the refit (ticket 21), which follows Santander's second-place lesson of training on the data that matches the target. On the selection set, cross-fitted over two halves, it scored 0.605 against 0.597 at weight 1 (+0.008, 95% −0.005 .. +0.023). That is a tie under the claims rule, but it passed the upload rule, so it became the 17:30 upload. Its gains are on cloud, software, insurance and `none`.
+
 **3. Conclusion.** Every honest route lands at 0.59–0.60 on selection. The one new signal is real but small against what the models already know. By the arithmetic above, 0.68 needs a near-perfect `none` signal, and none exists in behavioural features on this data. Whatever the other team does, it is outside what we allowed ourselves.
 
-**4. How we chose the last upload.** The 0.03 tie rule stays for every "better" claim here, but it is the wrong rule for choosing an upload. Only the best upload counts and v2's 0.606 is already locked in, so a worse upload costs nothing. Candidates therefore entered a pool if they beat v2 on selection and disagreed with v2's file on at least 10% of test Clients. They were ranked by the selection gain minus 1.7 paired standard errors, a correction for having tried about 15 things. The hail mary ranked first (−0.008), ahead of the `none` stacker (−0.010) and the batch decision (−0.010).
+**4. How we chose the last upload.** The 0.03 tie rule stays for every "better" claim here, but it is the wrong rule for choosing an upload. Only the best upload counts and v2's 0.606 is already locked in, so a worse upload costs nothing. Candidates therefore entered a pool if they beat v2 on selection and disagreed with v2's file on at least 10% of test Clients. They were ranked by the selection gain minus 1.7 paired standard errors, a correction for having tried about 15 things. The hail mary ranked first (−0.008), ahead of the `none` stacker (−0.010) and the batch decision (−0.010). Ticket 21's weighted refit then replaced it under its own pre-registered rule: it had to beat weight 1 in the rehearsal, disagree with v2 on at least 10% of test Clients, and be ready by 17:10.
 
 ## What we learned
 
