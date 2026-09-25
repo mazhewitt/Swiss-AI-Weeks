@@ -14,6 +14,7 @@ decision never scores below argmax.
 """
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -79,11 +80,11 @@ def _macro_f1(decision: Decision, proba: pd.DataFrame, labels: pd.Series) -> flo
 
 
 def _ascend(
-    start: Decision, coordinates: list[str | None], proba: pd.DataFrame, labels: pd.Series
+    start: Decision, coordinates: list[str | None], objective: Callable[[Decision], float]
 ) -> tuple[Decision, float]:
     """Coordinate-wise grid search: each label's weight (or, for None, the `none` threshold)
-    in turn over its grid, keeping only strict macro-F1 gains."""
-    best, best_f1 = start, _macro_f1(start, proba, labels)
+    in turn over its grid, keeping only strict gains in `objective`."""
+    best, best_f1 = start, objective(start)
     for _ in range(SEARCH_PASSES):
         improved = False
         for coordinate in coordinates:
@@ -93,12 +94,29 @@ def _ascend(
                     trial.none_threshold = value
                 else:
                     trial.weights[coordinate] = value
-                f1 = _macro_f1(trial, proba, labels)
+                f1 = objective(trial)
                 if f1 > best_f1:
                     best, best_f1, improved = trial, f1, True
         if not improved:
             break
     return best, best_f1
+
+
+def _search(objective: Callable[[Decision], float]) -> tuple[Decision, float, float]:
+    """E3's search: weighted argmax over all eight labels, and the best weighted family with a
+    `none` threshold. The better one is kept only if it beats argmax outright. Returns the
+    decision, argmax's objective and the kept decision's objective."""
+    best = Decision()
+    argmax_f1 = best_f1 = objective(best)
+    searches = [
+        (Decision(), list(LABELS)),
+        (Decision(none_threshold=0.0), [None, *MERCHANT_FAMILIES]),
+    ]
+    for start, coordinates in searches:
+        found, f1 = _ascend(start, coordinates, objective)
+        if f1 > best_f1:
+            best, best_f1 = found, f1
+    return best, argmax_f1, best_f1
 
 
 def fit(oof_proba: pd.DataFrame, labels: pd.Series) -> tuple[Decision, dict[str, float]]:
@@ -108,15 +126,29 @@ def fit(oof_proba: pd.DataFrame, labels: pd.Series) -> tuple[Decision, dict[str,
     argmax outright. Returns the decision and the argmax and tuned macro-F1 on this data."""
     labels = labels.reindex(oof_proba.index)
     proba = oof_proba[list(LABELS)]
-    best = Decision()
-    argmax_f1 = best_f1 = _macro_f1(best, proba, labels)
-    searches = [
-        (Decision(), list(LABELS)),
-        (Decision(none_threshold=0.0), [None, *MERCHANT_FAMILIES]),
-    ]
-    for start, coordinates in searches:
-        found, f1 = _ascend(start, coordinates, proba, labels)
-        if f1 > best_f1:
-            best, best_f1 = found, f1
+    best, argmax_f1, best_f1 = _search(lambda d: _macro_f1(d, proba, labels))
     best.fitted_on_clients = [str(c) for c in proba.index]
     return best, {"argmax_macro_f1": argmax_f1, "tuned_macro_f1": best_f1}
+
+
+def expected_macro_f1(predicted: pd.Series, proba: pd.DataFrame) -> float:
+    """Macro-F1 expected on a batch when its own probabilities stand in as soft labels. For each
+    label c: E[TP_c] = sum of p_ic over the Clients predicted c, E[true_c] = sum_i p_ic, and
+    F1_c = 2 E[TP_c] / (#predicted c + E[true_c]) (0 when both are 0); the mean over the eight
+    labels. No labels are read."""
+    p = proba[list(LABELS)].to_numpy(dtype=float)
+    hot = np.asarray(predicted.reindex(proba.index), dtype=object)[:, None] == np.array(LABELS, dtype=object)[None, :]
+    tp = (p * hot).sum(axis=0)
+    denom = hot.sum(axis=0) + p.sum(axis=0)
+    f1 = np.divide(2 * tp, denom, out=np.zeros_like(denom), where=denom > 0)
+    return float(f1.mean())
+
+
+def fit_expected(proba: pd.DataFrame) -> tuple[Decision, dict[str, float]]:
+    """The batch decision D: E3's search, over E3's grid and parameters, maximising the batch's
+    own expected macro-F1 (`expected_macro_f1`) instead of macro-F1 on labels. Unsupervised: it
+    is picked on the very Clients it then labels."""
+    proba = proba[list(LABELS)]
+    best, argmax_f1, best_f1 = _search(lambda d: expected_macro_f1(d.apply(proba), proba))
+    best.fitted_on_clients = [str(c) for c in proba.index]
+    return best, {"argmax_expected_macro_f1": argmax_f1, "expected_macro_f1": best_f1}
