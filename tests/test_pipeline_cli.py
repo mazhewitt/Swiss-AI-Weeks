@@ -291,6 +291,7 @@ CHANGED_PARAMS = {
     "canonical_periods": "7,30",
     "music_streaming_split": "20",
     "refund_window_days": "3",
+    "schedule_tolerance_days": "1",
 }
 
 
