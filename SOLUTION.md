@@ -68,9 +68,9 @@ flowchart TB
 | Candidate | Sealed holdout (300 Clients, one human-started check) | Test leaderboard |
 |---|---|---|
 | v2: ranker + `none` model + Pseudo-Labels | 0.596 | **0.606** |
-| Survival Race | – | not yet scored |
+| Survival Race | – | 0.594 |
 
-v2 held up on test, and the drift we feared did not cost it. The two candidates disagree on 16% of test Clients. Only the best upload counts, so both are uploaded.
+v2 held up on test, and the drift we feared did not cost it. The Survival Race scored 0.594 on test: 0.012 below v2. That reverses its +0.003 on selection, and both gaps are inside the noise of 700 and 1,000 Clients. The two candidates disagree on 16% of test Clients. Only the best upload counts, so both were uploaded.
 
 ## What we learned
 

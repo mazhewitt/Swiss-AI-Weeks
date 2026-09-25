@@ -103,12 +103,12 @@ flowchart TB
 | | Train out-of-fold, nested tuned | Selection (700) | Test (leaderboard) |
 |---|---|---|---|
 | v2: ranker + `none` model + Pseudo-Labels | 0.6082 | 0.5871 | **0.6059** |
-| Survival Race (unprojected-last order) | 0.6239 | **0.5903** | not yet scored |
+| Survival Race (unprojected-last order) | 0.6239 | **0.5903** | 0.5937 |
 | Survival Race (monthly-slot order) | 0.6323 | 0.5862 | – |
 
 v2 also scored 0.5960 on the sealed holdout.
 
-Every difference in the table is a tie under our rule (a delta under 0.03). The Survival Race agrees with v2 on 83% of selection Clients and 84% of test Clients.
+Every difference in the table is a tie under our rule (a delta under 0.03). On test, the Survival Race scored 0.012 below v2, the opposite sign to selection. With 1,000 test Clients that is noise too. The Survival Race agrees with v2 on 83% of selection Clients and 84% of test Clients.
 
 It gains most where v2 was weakest: mobile F1 rises from 0.52 to 0.70 and insurance from 0.55 to 0.61. It is lower on cloud and software. The probabilities are calibrated. The predicted `none` rate matches the observed rate for Clients with 1, 2 and 3 active families (0.35/0.32, 0.23/0.22, 0.14/0.13). With 4 families it overpredicts: 0.11 against 0.06.
 
